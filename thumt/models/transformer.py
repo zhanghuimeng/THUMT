@@ -6,9 +6,11 @@ from __future__ import division
 from __future__ import print_function
 
 import math
+import logging
 import torch
 import torch.nn as nn
 
+import thumt.data as data
 import thumt.utils as utils
 import thumt.modules as modules
 
@@ -26,17 +28,28 @@ class AttentionSubLayer(modules.Module):
                 params.hidden_size, params.num_heads, params.attention_dropout)
             self.layer_norm = modules.LayerNorm(params.hidden_size)
 
-    def forward(self, x, bias, memory=None, state=None):
+    # 新加参数：seq_q（q的id list）, seq_k（k的id list）, vocab_q（x的vocab）, vocab_k（state的vocab，在self-attention与vocab_q相同）
+    # 在self-attention情况下，x是输入，bias是masking bias，memory和state都是None
+    def forward(self, x, bias, seq_q, seq_k, vocab_q, vocab_k, memory=None, state=None):
         if self.normalization == "before":
             y = self.layer_norm(x)
         else:
             y = x
 
+        # print("seq_q")
+        # utils.helper.print_sentence(seq_q.cpu().numpy(), vocab_q["idx2word"])
+        # print("seq_k")
+        # utils.helper.print_sentence(seq_k.cpu().numpy(), vocab_k["idx2word"])
+        # exit(0)
+
         if self.training or state is None:
-            y = self.attention(y, bias, memory, None)
+            y = self.attention(y, bias, seq_q, seq_k, vocab_q, vocab_k, memory, None)
         else:
+            # self-attention
+            print("state: %s" % str(state))
             kv = [state["k"], state["v"]]
-            y, k, v = self.attention(y, bias, memory, kv)
+            y, k, v = self.attention(query=y, bias=bias, seq_q=seq_q, seq_k=seq_k, vocab_q=vocab_q, vocab_k=vocab_k,
+                                     memory=memory, kv=kv)
             state["k"], state["v"] = k, v
 
         y = nn.functional.dropout(y, self.dropout, self.training)
@@ -85,8 +98,8 @@ class TransformerEncoderLayer(modules.Module):
             self.self_attention = AttentionSubLayer(params)
             self.feed_forward = FFNSubLayer(params)
 
-    def forward(self, x, bias):
-        x = self.self_attention(x, bias)
+    def forward(self, x, bias, seq, vocabulary):
+        x = self.self_attention(x, bias, seq_q=seq, seq_k=seq, vocab_q=vocabulary, vocab_k=vocabulary)
         x = self.feed_forward(x)
         return x
 
@@ -126,9 +139,9 @@ class TransformerEncoder(modules.Module):
             else:
                 self.layer_norm = None
 
-    def forward(self, x, bias):
+    def forward(self, x, bias, seq, vocabulary):
         for layer in self.layers:
-            x = layer(x, bias)
+            x = layer(x, bias, seq, vocabulary)
 
         if self.normalization == "before":
             x = self.layer_norm(x)
@@ -172,6 +185,24 @@ class Transformer(modules.Module):
     def __init__(self, params, name="transformer"):
         super(Transformer, self).__init__(name=name)
         self.params = params
+
+        # add vocabulary of source and target
+        vocab, word2idx, idx2word, tagtype, tagcontent = data.vocab.load_tagged_vocabulary(params, params.vocab[0])
+        self.src_vocabulary = {
+            "vocab": vocab,
+            "word2idx": word2idx,
+            "idx2word": idx2word,
+            "tagtype": tagtype,
+            "tagcontent": tagcontent,
+        }
+        vocab, word2idx, idx2word, tagtype, tagcontent = data.vocab.load_tagged_vocabulary(params, params.vocab[1])
+        self.tgt_vocabulary = {
+            "vocab": vocab,
+            "word2idx": word2idx,
+            "idx2word": idx2word,
+            "tagtype": tagtype,
+            "tagcontent": tagcontent,
+        }
 
         with utils.scope(name):
             self.build_embedding(params)
@@ -257,7 +288,7 @@ class Transformer(modules.Module):
                                        self.training)
 
         enc_attn_bias = enc_attn_bias.to(inputs)
-        encoder_output = self.encoder(inputs, enc_attn_bias)
+        encoder_output = self.encoder(inputs, enc_attn_bias, src_seq, self.src_vocabulary)
 
         state["encoder_output"] = encoder_output
         state["enc_attn_bias"] = enc_attn_bias

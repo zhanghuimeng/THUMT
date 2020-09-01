@@ -11,6 +11,7 @@ import thumt.utils as utils
 
 from thumt.modules.module import Module
 from thumt.modules.affine import Affine
+from thumt.utils.helper import gen_typed_matrix
 
 
 class Attention(Module):
@@ -128,7 +129,7 @@ class MultiHeadAttention(MultiHeadAttentionBase):
 
         self.reset_parameters()
 
-    def forward(self, query, bias, memory=None, kv=None):
+    def forward(self, query, bias, seq_q, seq_k, vocab_q, vocab_k, memory=None, kv=None):
         q = self.q_transform(query)
 
         if memory is not None:
@@ -148,6 +149,16 @@ class MultiHeadAttention(MultiHeadAttentionBase):
             if kv is not None:
                 k = torch.cat([kv[0], k], dim=1)
                 v = torch.cat([kv[1], v], dim=1)
+
+            # typed-attention matrix
+            for i in range(len(seq_q)):
+                typed_matrix = gen_typed_matrix(
+                    seq_q=seq_q[i].cpu().numpy(),
+                    seq_k=seq_k[i].cpu().numpy(),
+                    vocab_q=vocab_q,
+                    vocab_k=vocab_k
+                )
+                exit(0)
 
         # split heads
         qh = self.split_heads(q, self.num_heads)

@@ -5,6 +5,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import re
 import torch
 import numpy as np
 
@@ -36,6 +37,41 @@ def load_vocabulary(filename):
         idx2word[idx] = word
 
     return vocab, word2idx, idx2word
+
+
+def load_tagged_vocabulary(params, filename):
+    vocab = []
+    tagtype = []
+    tagcontent = []
+    with open(filename, "r") as fd:
+        for line in fd:
+            vocab.append(line.strip())
+            if vocab[-1] == params.pad or vocab[-1] == params.bos or vocab[-1] == params.eos or vocab[-1] == params.unk:
+                tagtype.append("std")
+                tagcontent.append("")
+                continue
+            match_obj = re.match(r"<(/)?(\w*)>", vocab[-1])
+            if match_obj:
+                if match_obj.group(1) == "/":
+                    tagtype.append("end")
+                else:
+                    tagtype.append("start")
+                tagcontent.append(match_obj.group(2))
+            else:
+                tagtype.append("std")
+                tagcontent.append("")
+
+            # if match_obj:
+            #     print("vocab=%s tagtype=%s tagcontent=%s" % (vocab[-1], tagtype[-1], tagcontent[-1]))
+
+    word2idx = {}
+    idx2word = {}
+
+    for idx, word in enumerate(vocab):
+        word2idx[word] = idx
+        idx2word[idx] = word
+
+    return vocab, word2idx, idx2word, tagtype, tagcontent
 
 
 def lookup(inputs, mode, params):
