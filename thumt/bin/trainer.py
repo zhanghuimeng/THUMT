@@ -417,13 +417,6 @@ def main(args):
             counter += 1
             t = time.time()
             features = data.lookup(features, "train", params)
-            # features, labels = features
-            # print("source: %s" % str(features["source"].shape))
-            # print("source_mask: %s" % str(features["source_mask"].shape))
-            # print("target: %s" % str(features["target"].shape))
-            # print("target_mask: %s" % str(features["target_mask"].shape))
-            # print("labels: %s" % str(labels.shape))
-            # exit(0)
             loss = train_fn(features)
             gradients = optimizer.compute_gradients(loss,
                                                     list(model.parameters()))

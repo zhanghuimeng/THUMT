@@ -46,7 +46,6 @@ class AttentionSubLayer(modules.Module):
             y = self.attention(y, bias, seq_q, seq_k, vocab_q, vocab_k, memory, None)
         else:
             # self-attention
-            print("state: %s" % str(state))
             kv = [state["k"], state["v"]]
             y, k, v = self.attention(query=y, bias=bias, seq_q=seq_q, seq_k=seq_k, vocab_q=vocab_q, vocab_k=vocab_k,
                                      memory=memory, kv=kv)
@@ -116,9 +115,11 @@ class TransformerDecoderLayer(modules.Module):
                                                     name="encdec_attention")
             self.feed_forward = FFNSubLayer(params)
 
-    def __call__(self, x, attn_bias, encdec_bias, memory, state=None):
-        x = self.self_attention(x, attn_bias, state=state)
-        x = self.encdec_attention(x, encdec_bias, memory)
+    def __call__(self, x, attn_bias, encdec_bias, memory, state=None, src_seq=None, tgt_seq=None, src_vocab=None, tgt_vocab=None):
+        x = self.self_attention(x, attn_bias, state=state, seq_q=tgt_seq, seq_k=tgt_seq,
+                                vocab_q=tgt_vocab, vocab_k=tgt_vocab)
+        x = self.encdec_attention(x, encdec_bias, memory=memory, seq_q=tgt_seq, seq_k=src_seq,
+                                  vocab_q=tgt_vocab, vocab_k=src_vocab)
         x = self.feed_forward(x)
         return x
 
@@ -166,13 +167,13 @@ class TransformerDecoder(modules.Module):
             else:
                 self.layer_norm = None
 
-    def forward(self, x, attn_bias, encdec_bias, memory, state=None):
+    def forward(self, x, attn_bias, encdec_bias, memory, state=None, src_seq=None, tgt_seq=None, src_vocab=None, tgt_vocab=None):
         for i, layer in enumerate(self.layers):
             if state is not None:
                 x = layer(x, attn_bias, encdec_bias, memory,
-                          state["decoder"]["layer_%d" % i])
+                          state["decoder"]["layer_%d" % i], src_seq, tgt_seq, src_vocab, tgt_vocab)
             else:
-                x = layer(x, attn_bias, encdec_bias, memory, None)
+                x = layer(x, attn_bias, encdec_bias, memory, None, src_seq, tgt_seq, src_vocab, tgt_vocab)
 
         if self.normalization == "before":
             x = self.layer_norm(x)
@@ -296,6 +297,7 @@ class Transformer(modules.Module):
         return state
 
     def decode(self, features, state, mode="infer"):
+        src_seq = features["source"]
         tgt_seq = features["target"]
 
         enc_attn_bias = state["enc_attn_bias"]
@@ -313,12 +315,17 @@ class Transformer(modules.Module):
         encoder_output = state["encoder_output"]
         dec_attn_bias = dec_attn_bias.to(targets)
 
+        # print("decoder_input: %s" % str(list(decoder_input.shape)))
+        # print("dec_attn_bias: %s" % str(list(dec_attn_bias.shape)))
+
         if mode == "infer":
             decoder_input = decoder_input[:, -1:, :]
             dec_attn_bias = dec_attn_bias[:, :, -1:, :]
 
-        decoder_output = self.decoder(decoder_input, dec_attn_bias,
-                                      enc_attn_bias, encoder_output, state)
+        decoder_output = self.decoder(x=decoder_input, attn_bias=dec_attn_bias,
+                                      encdec_bias=enc_attn_bias, memory=encoder_output,
+                                      state=state, src_seq=src_seq, tgt_seq=tgt_seq,
+                                      src_vocab=self.src_vocabulary,tgt_vocab=self.tgt_vocabulary)
 
         decoder_output = torch.reshape(decoder_output, [-1, self.hidden_size])
         decoder_output = torch.transpose(decoder_output, -1, -2)

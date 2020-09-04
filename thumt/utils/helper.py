@@ -49,17 +49,17 @@ def gen_typed_matrix(seq_q, seq_k, vocab_q, vocab_k):
         for j in range(nk):
             if nearest_q[i] is None:
                 typed_matrix[0][i][j] = 1
-                print("0 ", end="")
+                # print("0 ", end="")
             elif nearest_q[i] == nearest_k[j]:
                 typed_matrix[1][i][j] = 1
-                print("1 ", end="")
+                # print("1 ", end="")
             else:
                 typed_matrix[2][i][j] = 1
-                print("2 ", end="")
-        print()
-    print(" ".join(["None" if s is None else s for s in nearest_q]))
-    print_sentence(seq_q, vocab_q["idx2word"])
-    print(" ".join(["None" if s is None else s for s in nearest_k]))
-    print_sentence(seq_k, vocab_k["idx2word"])
-    print()
+                # print("2 ", end="")
+        # print()
+    # print(" ".join(["None" if s is None else s for s in nearest_q]))
+    # print_sentence(seq_q, vocab_q["idx2word"])
+    # print(" ".join(["None" if s is None else s for s in nearest_k]))
+    # print_sentence(seq_k, vocab_k["idx2word"])
+    # print()
     return typed_matrix

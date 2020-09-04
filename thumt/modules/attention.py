@@ -126,6 +126,11 @@ class MultiHeadAttention(MultiHeadAttentionBase):
                                       name="v_transform")
             self.o_transform = Affine(hidden_size, hidden_size,
                                       name="o_transform")
+            # typed-attention
+            self.typed_weight = nn.Parameter(torch.zeros(
+                [3, self.num_heads, self.hidden_size // self.num_heads, self.hidden_size // self.num_heads],
+                dtype=torch.float32))
+            self.add_name(self.typed_weight, "typed_weight")
 
         self.reset_parameters()
 
@@ -150,15 +155,19 @@ class MultiHeadAttention(MultiHeadAttentionBase):
                 k = torch.cat([kv[0], k], dim=1)
                 v = torch.cat([kv[1], v], dim=1)
 
-            # typed-attention matrix
-            for i in range(len(seq_q)):
-                typed_matrix = gen_typed_matrix(
-                    seq_q=seq_q[i].cpu().numpy(),
-                    seq_k=seq_k[i].cpu().numpy(),
-                    vocab_q=vocab_q,
-                    vocab_k=vocab_k
-                )
-                exit(0)
+        # typed-attention matrix
+        typed_matrix = []
+        for i in range(len(seq_q)):
+            typed_matrix.append(torch.from_numpy(gen_typed_matrix(
+                seq_q=seq_q[i].cpu().numpy(),
+                seq_k=seq_k[i].cpu().numpy(),
+                vocab_q=vocab_q,
+                vocab_k=vocab_k
+            )).float())
+            # print(list(query[i].shape))
+            # print(list(k[i].shape))
+            # exit(0)
+        typed_matrix = torch.stack(typed_matrix).cuda()
 
         # split heads
         qh = self.split_heads(q, self.num_heads)
@@ -169,11 +178,31 @@ class MultiHeadAttention(MultiHeadAttentionBase):
         qh = qh * (self.hidden_size // self.num_heads) ** -0.5
 
         # dot-product attention
-        kh = torch.transpose(kh, -2, -1)
-        logits = torch.matmul(qh, kh)
+        # kh = torch.transpose(kh, -2, -1)
+        # logits = torch.matmul(qh, kh)
+
+        # typed_attention
+        batch = qh.shape[0]
+        batch_list = []
+        for i in range(batch):
+            logits_list = []
+            qh0 = qh[i]
+            kh0 = torch.transpose(kh[i], -2, -1)
+            # print("qh0: %s" % str(list(qh0.shape)))
+            # print("kh0: %s" % str(list(kh0.shape)))
+            for j in range(3):
+                typed_logits = torch.matmul(torch.matmul(qh0, self.typed_weight[j]), kh0)
+                print("typed_logits: %s" % str(list(typed_logits.shape)))
+                print("typed_matrix: %s" % str(list(typed_matrix[i][j].unsqueeze(0).shape)))
+                logits_list.append(typed_logits * typed_matrix[i][j].unsqueeze(0))
+            batch_list.append(torch.stack(logits_list).sum(dim=0))
+        logits = torch.stack(batch_list)
+        # print("logits: %s" % str(list(logits.shape)))
 
         if bias is not None:
+            # print("logits(1): %s" % str(list(logits.shape)))
             logits = logits + bias
+            # print("logits(2): %s" % str(list(logits.shape)))
 
         weights = torch.nn.functional.dropout(torch.softmax(logits, dim=-1),
                                               p=self.dropout,
@@ -196,6 +225,7 @@ class MultiHeadAttention(MultiHeadAttentionBase):
             nn.init.xavier_uniform_(self.k_transform.weight, 2 ** -0.5)
             nn.init.xavier_uniform_(self.v_transform.weight, 2 ** -0.5)
             nn.init.xavier_uniform_(self.o_transform.weight)
+            nn.init.xavier_uniform_(self.typed_weight)  # typed-attention
             nn.init.constant_(self.q_transform.bias, 0.0)
             nn.init.constant_(self.k_transform.bias, 0.0)
             nn.init.constant_(self.v_transform.bias, 0.0)
