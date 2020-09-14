@@ -29,8 +29,9 @@ class AttentionSubLayer(modules.Module):
             self.layer_norm = modules.LayerNorm(params.hidden_size)
 
     # 新加参数：seq_q（q的id list）, seq_k（k的id list）, vocab_q（x的vocab）, vocab_k（state的vocab，在self-attention与vocab_q相同）
+    # mode（模式），type（attention类型，用来处理typed-attention的特殊情况）
     # 在self-attention情况下，x是输入，bias是masking bias，memory和state都是None
-    def forward(self, x, bias, seq_q, seq_k, vocab_q, vocab_k, memory=None, state=None):
+    def forward(self, x, bias, seq_q, seq_k, vocab_q, vocab_k, memory=None, state=None, mode="train", type="enc-self-attn"):
         if self.normalization == "before":
             y = self.layer_norm(x)
         else:
@@ -43,12 +44,13 @@ class AttentionSubLayer(modules.Module):
         # exit(0)
 
         if self.training or state is None:
-            y = self.attention(y, bias, seq_q, seq_k, vocab_q, vocab_k, memory, None)
+            y = self.attention(y, bias, seq_q, seq_k, vocab_q, vocab_k, memory, None,
+                               mode=mode, type=type)
         else:
             # self-attention
             kv = [state["k"], state["v"]]
             y, k, v = self.attention(query=y, bias=bias, seq_q=seq_q, seq_k=seq_k, vocab_q=vocab_q, vocab_k=vocab_k,
-                                     memory=memory, kv=kv)
+                                     memory=memory, kv=kv, mode=mode, type=type)
             state["k"], state["v"] = k, v
 
         y = nn.functional.dropout(y, self.dropout, self.training)
@@ -97,8 +99,10 @@ class TransformerEncoderLayer(modules.Module):
             self.self_attention = AttentionSubLayer(params)
             self.feed_forward = FFNSubLayer(params)
 
-    def forward(self, x, bias, seq, vocabulary):
-        x = self.self_attention(x, bias, seq_q=seq, seq_k=seq, vocab_q=vocabulary, vocab_k=vocabulary)
+    def forward(self, x, bias, seq, vocabulary, mode="train"):
+        x = self.self_attention(x, bias, seq_q=seq, seq_k=seq,
+                                vocab_q=vocabulary, vocab_k=vocabulary,
+                                mode=mode, type="enc-self-attn")
         x = self.feed_forward(x)
         return x
 
@@ -115,11 +119,11 @@ class TransformerDecoderLayer(modules.Module):
                                                     name="encdec_attention")
             self.feed_forward = FFNSubLayer(params)
 
-    def __call__(self, x, attn_bias, encdec_bias, memory, state=None, src_seq=None, tgt_seq=None, src_vocab=None, tgt_vocab=None):
+    def __call__(self, x, attn_bias, encdec_bias, memory, state=None, src_seq=None, tgt_seq=None, src_vocab=None, tgt_vocab=None, mode="train"):
         x = self.self_attention(x, attn_bias, state=state, seq_q=tgt_seq, seq_k=tgt_seq,
-                                vocab_q=tgt_vocab, vocab_k=tgt_vocab)
+                                vocab_q=tgt_vocab, vocab_k=tgt_vocab, mode=mode, type="dec-self-attn")
         x = self.encdec_attention(x, encdec_bias, memory=memory, seq_q=tgt_seq, seq_k=src_seq,
-                                  vocab_q=tgt_vocab, vocab_k=src_vocab)
+                                  vocab_q=tgt_vocab, vocab_k=src_vocab, mode=mode, type="enc-dec-attn")
         x = self.feed_forward(x)
         return x
 
@@ -140,9 +144,9 @@ class TransformerEncoder(modules.Module):
             else:
                 self.layer_norm = None
 
-    def forward(self, x, bias, seq, vocabulary):
+    def forward(self, x, bias, seq, vocabulary, mode="train"):
         for layer in self.layers:
-            x = layer(x, bias, seq, vocabulary)
+            x = layer(x, bias, seq, vocabulary, mode)
 
         if self.normalization == "before":
             x = self.layer_norm(x)
@@ -167,13 +171,13 @@ class TransformerDecoder(modules.Module):
             else:
                 self.layer_norm = None
 
-    def forward(self, x, attn_bias, encdec_bias, memory, state=None, src_seq=None, tgt_seq=None, src_vocab=None, tgt_vocab=None):
+    def forward(self, x, attn_bias, encdec_bias, memory, state=None, src_seq=None, tgt_seq=None, src_vocab=None, tgt_vocab=None, mode="train"):
         for i, layer in enumerate(self.layers):
             if state is not None:
                 x = layer(x, attn_bias, encdec_bias, memory,
-                          state["decoder"]["layer_%d" % i], src_seq, tgt_seq, src_vocab, tgt_vocab)
+                          state["decoder"]["layer_%d" % i], src_seq, tgt_seq, src_vocab, tgt_vocab, mode)
             else:
-                x = layer(x, attn_bias, encdec_bias, memory, None, src_seq, tgt_seq, src_vocab, tgt_vocab)
+                x = layer(x, attn_bias, encdec_bias, memory, None, src_seq, tgt_seq, src_vocab, tgt_vocab, mode)
 
         if self.normalization == "before":
             x = self.layer_norm(x)
@@ -277,7 +281,7 @@ class Transformer(modules.Module):
             nn.init.normal_(self.softmax_weights, mean=0.0,
                             std=self.params.hidden_size ** -0.5)
 
-    def encode(self, features, state):
+    def encode(self, features, state, mode="train"):
         src_seq = features["source"]
         src_mask = features["source_mask"]
         enc_attn_bias = self.masking_bias(src_mask)
@@ -289,7 +293,7 @@ class Transformer(modules.Module):
                                        self.training)
 
         enc_attn_bias = enc_attn_bias.to(inputs)
-        encoder_output = self.encoder(inputs, enc_attn_bias, src_seq, self.src_vocabulary)
+        encoder_output = self.encoder(inputs, enc_attn_bias, src_seq, self.src_vocabulary, mode=mode)
 
         state["encoder_output"] = encoder_output
         state["enc_attn_bias"] = enc_attn_bias
@@ -315,17 +319,21 @@ class Transformer(modules.Module):
         encoder_output = state["encoder_output"]
         dec_attn_bias = dec_attn_bias.to(targets)
 
-        # print("decoder_input: %s" % str(list(decoder_input.shape)))
-        # print("dec_attn_bias: %s" % str(list(dec_attn_bias.shape)))
+        # print(mode)
+        # utils.helper.print_sentence(tgt_seq, self.tgt_vocabulary["idx2word"])
+        # print()
 
         if mode == "infer":
             decoder_input = decoder_input[:, -1:, :]
             dec_attn_bias = dec_attn_bias[:, :, -1:, :]
+            # print("modified infer sentence")
+            # utils.helper.print_sentence(tgt_seq[:, -1:], self.tgt_vocabulary["idx2word"])
+            # print()
 
         decoder_output = self.decoder(x=decoder_input, attn_bias=dec_attn_bias,
                                       encdec_bias=enc_attn_bias, memory=encoder_output,
                                       state=state, src_seq=src_seq, tgt_seq=tgt_seq,
-                                      src_vocab=self.src_vocabulary,tgt_vocab=self.tgt_vocabulary)
+                                      src_vocab=self.src_vocabulary,tgt_vocab=self.tgt_vocabulary, mode=mode)
 
         decoder_output = torch.reshape(decoder_output, [-1, self.hidden_size])
         decoder_output = torch.transpose(decoder_output, -1, -2)
@@ -339,7 +347,7 @@ class Transformer(modules.Module):
 
         state = self.empty_state(features["target"].shape[0],
                                  labels.device)
-        state = self.encode(features, state)
+        state = self.encode(features, state, mode=mode)
         logits, _ = self.decode(features, state, mode=mode)
         loss = self.criterion(logits, labels)
         mask = mask.to(logits)

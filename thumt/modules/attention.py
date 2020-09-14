@@ -7,6 +7,7 @@ from __future__ import print_function
 
 import torch
 import torch.nn as nn
+import torch.distributed as dist
 import thumt.utils as utils
 
 from thumt.modules.module import Module
@@ -134,7 +135,7 @@ class MultiHeadAttention(MultiHeadAttentionBase):
 
         self.reset_parameters()
 
-    def forward(self, query, bias, seq_q, seq_k, vocab_q, vocab_k, memory=None, kv=None):
+    def forward(self, query, bias, seq_q, seq_k, vocab_q, vocab_k, memory=None, kv=None, mode="train", type="enc-self-attn"):
         q = self.q_transform(query)
 
         if memory is not None:
@@ -158,18 +159,39 @@ class MultiHeadAttention(MultiHeadAttentionBase):
         # typed-attention matrix
         typed_matrix = []
         for i in range(len(seq_q)):
+            # [3, nq, nk]
             typed_matrix.append(torch.from_numpy(gen_typed_matrix(
                 seq_q=seq_q[i].cpu().numpy(),
                 seq_k=seq_k[i].cpu().numpy(),
                 vocab_q=vocab_q,
                 vocab_k=vocab_k
             )).float())
-            # print(list(query[i].shape))
-            # print(list(k[i].shape))
-            # exit(0)
+            # infer阶段的特殊处理
+            # q只有一个，但k和v仍然是整个sequence
+            if mode == "infer":
+                if type == "enc-dec-attn":
+                    typed_matrix[-1] = typed_matrix[-1][:, -1:, :]
+                elif type == "dec-self-attn":
+                    typed_matrix[-1] = typed_matrix[-1][:, -1:, :]
+
         typed_matrix = torch.stack(typed_matrix).cuda()
+        # typed_matrix: [3, batch, length_q, length_k]
+        # or: [3, batch, 1, length_k]
+        # or: [3, batch, 1, 1]
+        typed_matrix = torch.transpose(typed_matrix, 1, 0)
+        # if dist.get_rank() == 0:
+        #     print(mode)
+        #     print(type)
+        #     print(list(typed_matrix.size()))
+        #     print("q: %s" % str(list(q.size())))
+        #     print("k: %s" % str(list(k.size())))
+        #     utils.helper.print_sentence(seq_q, vocab_q["idx2word"])
+        #     utils.helper.print_sentence(seq_k, vocab_k["idx2word"])
+        #     print()
 
         # split heads
+        # qh: [batch, heads, length_q, h2] or [batch, heads, 1, h2]
+        # kh, vh: [batch, heads, length_k, h2]
         qh = self.split_heads(q, self.num_heads)
         kh = self.split_heads(k, self.num_heads)
         vh = self.split_heads(v, self.num_heads)
@@ -177,27 +199,20 @@ class MultiHeadAttention(MultiHeadAttentionBase):
         # scale query
         qh = qh * (self.hidden_size // self.num_heads) ** -0.5
 
-        # dot-product attention
+        # dot-product attention (removed)
         # kh = torch.transpose(kh, -2, -1)
         # logits = torch.matmul(qh, kh)
 
         # typed_attention
-        batch = qh.shape[0]
-        batch_list = []
-        for i in range(batch):
-            logits_list = []
-            qh0 = qh[i]
-            kh0 = torch.transpose(kh[i], -2, -1)
-            # print("qh0: %s" % str(list(qh0.shape)))
-            # print("kh0: %s" % str(list(kh0.shape)))
-            for j in range(3):
-                typed_logits = torch.matmul(torch.matmul(qh0, self.typed_weight[j]), kh0)
-                print("typed_logits: %s" % str(list(typed_logits.shape)))
-                print("typed_matrix: %s" % str(list(typed_matrix[i][j].unsqueeze(0).shape)))
-                logits_list.append(typed_logits * typed_matrix[i][j].unsqueeze(0))
-            batch_list.append(torch.stack(logits_list).sum(dim=0))
-        logits = torch.stack(batch_list)
-        # print("logits: %s" % str(list(logits.shape)))
+        # us_weight: [3, 1, heads, h2, h2]
+        us_weight = torch.unsqueeze(self.typed_weight, 1)
+        # kh: [batch, heads, h2, length_k]
+        kh = torch.transpose(kh, -2, -1)
+        # typed_logits: [3, batch, heads, lq, lk]
+        typed_logits = torch.matmul(torch.matmul(qh, us_weight), kh)
+        typed_logits = typed_logits * typed_matrix.unsqueeze(2)
+        # logits: [batch, heads, lq, lk]
+        logits = torch.sum(typed_logits, dim=0)
 
         if bias is not None:
             # print("logits(1): %s" % str(list(logits.shape)))

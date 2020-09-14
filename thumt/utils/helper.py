@@ -1,8 +1,11 @@
 import logging
 import numpy as np
+import torch
 
 
 def print_sentence(sentence, idx2word):
+    if isinstance(sentence, torch.Tensor):
+        sentence = sentence.cpu().numpy()
     if sentence.ndim == 1:
         tokens = [idx2word[id] for id in sentence]
         print(" ".join(tokens))
