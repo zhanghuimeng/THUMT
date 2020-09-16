@@ -41,28 +41,47 @@ def load_vocabulary(filename):
 
 def load_tagged_vocabulary(params, filename):
     vocab = []
-    tagtype = []
-    tagcontent = []
+    tag_type_str = []  # std, start, end
+    tag_type_id = []  # 0, -1, 1
+    tag_content_str = []  # "", a
+    tag_content_id = []  # ids
+    tag_content_dict = {}
+
+    def get_id(i, tag):
+        if tag in tag_content_dict:
+            return tag_content_dict[tag]
+        tag_content_dict[tag] = i
+        return i
+
     with open(filename, "r") as fd:
-        for line in fd:
+        for i, line in enumerate(fd):
             vocab.append(line.strip())
             if vocab[-1] == params.pad or vocab[-1] == params.bos or vocab[-1] == params.eos or vocab[-1] == params.unk:
-                tagtype.append("std")
-                tagcontent.append("")
+                tag_type_str.append("std")
+                tag_type_id.append(0)
+                tag_content_str.append("")
+                tag_content_id.append(-1)
                 continue
             match_obj = re.match(r"<(/)?(\w*)>", vocab[-1])
             if match_obj:
+                tag_content_str.append(match_obj.group(2))
                 if match_obj.group(1) == "/":
-                    tagtype.append("end")
+                    tag_type_str.append("end")
+                    tag_type_id.append(1)
+                    tag_content_id.append(get_id(i, tag_content_str[-1]))
                 else:
-                    tagtype.append("start")
-                tagcontent.append(match_obj.group(2))
+                    tag_type_str.append("start")
+                    tag_type_id.append(-1)
+                    tag_content_id.append(get_id(i, tag_content_str[-1]))
             else:
-                tagtype.append("std")
-                tagcontent.append("")
+                tag_type_str.append("std")
+                tag_type_id.append(0)
+                tag_content_str.append("")
+                tag_content_id.append(-1)
 
             # if match_obj:
-            #     print("vocab=%s tagtype=%s tagcontent=%s" % (vocab[-1], tagtype[-1], tagcontent[-1]))
+            #     print("vocab=%s tagtype=(%s, %d) tagcontent=(%s, %d)" %
+            #           (vocab[-1], tag_type_str[-1], tag_type_id[-1], tag_content_str[-1], tag_content_id[-1]))
 
     word2idx = {}
     idx2word = {}
@@ -71,7 +90,14 @@ def load_tagged_vocabulary(params, filename):
         word2idx[word] = idx
         idx2word[idx] = word
 
-    return vocab, word2idx, idx2word, tagtype, tagcontent
+    return {
+        "vocab": vocab,
+        "word2idx": word2idx,
+        "idx2word": idx2word,
+        "tag_type_str": tag_type_str,
+        "tag_content_str": tag_content_str,
+        "tag_attr": torch.transpose(torch.LongTensor([tag_type_id, tag_content_id]), 1, 0)
+    }
 
 
 def lookup(inputs, mode, params):

@@ -12,7 +12,7 @@ import thumt.utils as utils
 
 from thumt.modules.module import Module
 from thumt.modules.affine import Affine
-from thumt.utils.helper import gen_typed_matrix
+from thumt.utils.helper import gen_typed_matrix, gen_typed_matrix_batch
 
 
 class Attention(Module):
@@ -157,37 +157,46 @@ class MultiHeadAttention(MultiHeadAttentionBase):
                 v = torch.cat([kv[1], v], dim=1)
 
         # typed-attention matrix
-        typed_matrix = []
-        for i in range(len(seq_q)):
-            # [3, nq, nk]
-            typed_matrix.append(torch.from_numpy(gen_typed_matrix(
-                seq_q=seq_q[i].cpu().numpy(),
-                seq_k=seq_k[i].cpu().numpy(),
-                vocab_q=vocab_q,
-                vocab_k=vocab_k
-            )).float())
-            # infer阶段的特殊处理
-            # q只有一个，但k和v仍然是整个sequence
-            if mode == "infer":
-                if type == "enc-dec-attn":
-                    typed_matrix[-1] = typed_matrix[-1][:, -1:, :]
-                elif type == "dec-self-attn":
-                    typed_matrix[-1] = typed_matrix[-1][:, -1:, :]
+        # TODO: need to modify to batched process
+        # typed_matrix = []
+        # for i in range(len(seq_q)):
+        #     # [3, nq, nk]
+        #     typed_matrix.append(torch.from_numpy(gen_typed_matrix(
+        #         seq_q=seq_q[i].cpu().numpy(),
+        #         seq_k=seq_k[i].cpu().numpy(),
+        #         vocab_q=vocab_q,
+        #         vocab_k=vocab_k
+        #     )).float())
+        #     # infer阶段的特殊处理
+        #     # q只有一个，但k和v仍然是整个sequence
+        #     if mode == "infer":
+        #         if type == "enc-dec-attn":
+        #             typed_matrix[-1] = typed_matrix[-1][:, -1:, :]
+        #         elif type == "dec-self-attn":
+        #             typed_matrix[-1] = typed_matrix[-1][:, -1:, :]
+        # typed_matrix = torch.stack(typed_matrix).cuda()
+        # typed_matrix = torch.transpose(typed_matrix, 1, 0)
 
-        typed_matrix = torch.stack(typed_matrix).cuda()
         # typed_matrix: [3, batch, length_q, length_k]
         # or: [3, batch, 1, length_k]
         # or: [3, batch, 1, 1]
-        typed_matrix = torch.transpose(typed_matrix, 1, 0)
-        # if dist.get_rank() == 0:
-        #     print(mode)
-        #     print(type)
-        #     print(list(typed_matrix.size()))
-        #     print("q: %s" % str(list(q.size())))
-        #     print("k: %s" % str(list(k.size())))
-        #     utils.helper.print_sentence(seq_q, vocab_q["idx2word"])
-        #     utils.helper.print_sentence(seq_k, vocab_k["idx2word"])
-        #     print()
+        typed_matrix = gen_typed_matrix_batch(seq_q, seq_k, vocab_q, vocab_k)
+        # patch for infer
+        if mode == "infer":
+            if type == "enc-dec-attn":
+                typed_matrix = typed_matrix[:, :, -1:, :]
+            elif type == "dec-self-attn":
+                typed_matrix = typed_matrix[:, :, -1:, :]
+
+        if dist.get_rank() == 0:
+            print(mode)
+            print(type)
+            print(list(typed_matrix.size()))
+            print("q: %s" % str(list(q.size())))
+            print("k: %s" % str(list(k.size())))
+            utils.helper.print_sentence(seq_q, vocab_q["idx2word"])
+            utils.helper.print_sentence(seq_k, vocab_k["idx2word"])
+            print()
 
         # split heads
         # qh: [batch, heads, length_q, h2] or [batch, heads, 1, h2]

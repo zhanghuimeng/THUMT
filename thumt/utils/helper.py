@@ -66,3 +66,61 @@ def gen_typed_matrix(seq_q, seq_k, vocab_q, vocab_k):
     # print_sentence(seq_k, vocab_k["idx2word"])
     # print()
     return typed_matrix
+
+def gen_typed_matrix_batch(seq_q, seq_k, vocab_q, vocab_k):
+    batch, lq = seq_q.shape
+    _, lk = seq_k.shape
+
+    # gather batch information
+    # [batch, lq, 2]
+    tag_attr_q = torch.nn.functional.embedding(seq_q, vocab_q["tag_attr"].cuda(seq_q.get_device()))
+    tag_attr_k = torch.nn.functional.embedding(seq_k, vocab_k["tag_attr"].cuda(seq_k.get_device()))
+    # [batch, lq]
+    tag_type_q = torch.squeeze(tag_attr_q[:, :, 0])
+    tag_content_q = torch.squeeze(tag_attr_q[:, :, 1])
+    tag_type_k = torch.squeeze(tag_attr_k[:, :, 0])
+    tag_content_k = torch.squeeze(tag_attr_k[:, :, 1])
+
+    def update_nearest_matrix(l, tag_type, tag_content):
+        nearest = torch.zeros([batch, l]).long()
+        stack = torch.full([batch, l], -1).long()
+        stack_pointer = torch.ones([batch]).long()
+        # stack operations
+        for i in range(l):
+            # indices to push and pop
+            # [batch]
+            open_tag_indices = tag_type[:, i] == -1
+            close_tag_indices = tag_type[:, i] == 1
+            # push values to stack
+            stack[open_tag_indices, stack_pointer[open_tag_indices]] = tag_content[open_tag_indices, i]
+            # increment stack pointer
+            stack_pointer[open_tag_indices] = stack_pointer[open_tag_indices] + 1
+            # update "nearest" matrix
+            nearest[:, i] = stack.gather(1, (stack_pointer - 1).unsqueeze(1)).squeeze()
+            # pop values from stack
+            stack_pointer[close_tag_indices] = stack_pointer[close_tag_indices] - 1
+        return nearest
+
+    nearest_q = update_nearest_matrix(lq, tag_type_q, tag_content_q)
+    nearest_k = update_nearest_matrix(lk, tag_type_k, tag_content_k)
+
+    # for i in range(batch):
+    #     print_sentence(seq_q[i], vocab_q["idx2word"])
+    #     print(nearest_q[i])
+    #     print_sentence(seq_k[i], vocab_k["idx2word"])
+    #     print(nearest_k[i])
+    #     print()
+
+    # 0: std, 1: in, 2: out
+    typed_matrix = torch.zeros([3, batch, lq, lk])
+    for i in range(batch):
+        for j in range(lq):
+            for k in range(lk):
+                if nearest_q[i][j] == -1:
+                    typed_matrix[0][i][j][k] = 1
+                elif nearest_q[i][j] == nearest_k[i][k]:
+                    typed_matrix[1][i][j][k] = 1
+                else:
+                    typed_matrix[2][i][j][k] = 1
+
+    return typed_matrix

@@ -192,22 +192,13 @@ class Transformer(modules.Module):
         self.params = params
 
         # add vocabulary of source and target
-        vocab, word2idx, idx2word, tagtype, tagcontent = data.vocab.load_tagged_vocabulary(params, params.vocab[0])
-        self.src_vocabulary = {
-            "vocab": vocab,
-            "word2idx": word2idx,
-            "idx2word": idx2word,
-            "tagtype": tagtype,
-            "tagcontent": tagcontent,
-        }
-        vocab, word2idx, idx2word, tagtype, tagcontent = data.vocab.load_tagged_vocabulary(params, params.vocab[1])
-        self.tgt_vocabulary = {
-            "vocab": vocab,
-            "word2idx": word2idx,
-            "idx2word": idx2word,
-            "tagtype": tagtype,
-            "tagcontent": tagcontent,
-        }
+        self.src_vocabulary = data.vocab.load_tagged_vocabulary(params, params.vocab[0])
+        self.tgt_vocabulary = data.vocab.load_tagged_vocabulary(params, params.vocab[1])
+        # for i, token in enumerate(self.tgt_vocabulary["vocab"]):
+        #     if "<" in token:
+        #         print(token)
+        #         print(self.tgt_vocabulary["tag_attr"][i])
+        # exit(0)
 
         with utils.scope(name):
             self.build_embedding(params)
