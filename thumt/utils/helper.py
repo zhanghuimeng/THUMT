@@ -82,6 +82,7 @@ def gen_typed_matrix_batch(seq_q, seq_k, vocab_q, vocab_k):
     tag_content_k = torch.squeeze(tag_attr_k[:, :, 1])
 
     def update_nearest_matrix(l, tag_type, tag_content):
+        print("tag_type: %s" % str(tag_type.size()))
         nearest = torch.zeros([batch, l]).long()
         stack = torch.full([batch, l], -1).long()
         stack_pointer = torch.ones([batch]).long()
@@ -112,15 +113,30 @@ def gen_typed_matrix_batch(seq_q, seq_k, vocab_q, vocab_k):
     #     print()
 
     # 0: std, 1: in, 2: out
-    typed_matrix = torch.zeros([3, batch, lq, lk])
-    for i in range(batch):
-        for j in range(lq):
-            for k in range(lk):
-                if nearest_q[i][j] == -1:
-                    typed_matrix[0][i][j][k] = 1
-                elif nearest_q[i][j] == nearest_k[i][k]:
-                    typed_matrix[1][i][j][k] = 1
-                else:
-                    typed_matrix[2][i][j][k] = 1
+    # typed_matrix = torch.zeros([3, batch, lq, lk])
+    # for i in range(batch):
+    #     for j in range(lq):
+    #         for k in range(lk):
+    #             if nearest_q[i][j] == -1:
+    #                 typed_matrix[0][i][j][k] = 1
+    #             elif nearest_q[i][j] == nearest_k[i][k]:
+    #                 typed_matrix[1][i][j][k] = 1
+    #             else:
+    #                 typed_matrix[2][i][j][k] = 1
+    typed_matrix_0 = (nearest_q == -1).long().unsqueeze(-1).repeat(1, 1, lk)
+    typed_matrix_12 = nearest_q.unsqueeze(-1) - nearest_k.unsqueeze(-2)
+    typed_matrix_1 = (typed_matrix_12 == 0).long()
+    # mask out typed_matrix_0
+    typed_matrix_1 = typed_matrix_1 * (1 - typed_matrix_0)
+    typed_matrix_2 = (typed_matrix_12 != 0).long()
+    typed_matrix_2 = typed_matrix_2 * (1 - typed_matrix_0)
 
-    return typed_matrix
+    # need to check
+    # check_matrix = typed_matrix_0 + typed_matrix_1 * 2 + typed_matrix_2 * 3
+    # for i in range(batch):
+    #     print_sentence(seq_q[i], vocab_q["idx2word"])
+    #     print_sentence(seq_k[i], vocab_k["idx2word"])
+    #     print(check_matrix[i])
+    #     print()
+
+    return torch.stack([typed_matrix_0, typed_matrix_1, typed_matrix_2])
