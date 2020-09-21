@@ -109,6 +109,9 @@ def lookup(inputs, mode, params):
         labels = labels.numpy()
         src_mask = torch.FloatTensor(features["source_mask"].numpy()).cuda()
         tgt_mask = torch.FloatTensor(features["target_mask"].numpy()).cuda()
+        enc_self_attn = torch.LongTensor(features["enc_self_attn"].numpy()).cuda()
+        dec_self_attn = torch.LongTensor(features["dec_self_attn"].numpy()).cuda()
+        enc_dec_attn = torch.LongTensor(features["enc_dec_attn"].numpy()).cuda()
 
         source = _lookup(source, params.lookup["source"])
         target = _lookup(target, params.lookup["target"])
@@ -118,7 +121,10 @@ def lookup(inputs, mode, params):
             "source": source,
             "source_mask": src_mask,
             "target": target,
-            "target_mask": tgt_mask
+            "target_mask": tgt_mask,
+            "enc_self_attn": enc_self_attn,
+            "dec_self_attn": dec_self_attn,
+            "enc_dec_attn": enc_dec_attn,
         }
 
         return features, labels
@@ -126,10 +132,12 @@ def lookup(inputs, mode, params):
         source = inputs["source"].numpy()
         source = _lookup(source, params.lookup["source"])
         src_mask = torch.FloatTensor(inputs["source_mask"].numpy()).cuda()
+        enc_self_attn = torch.LongTensor(inputs["enc_self_attn"].numpy()).cuda()
 
         features = {
             "source": source,
-            "source_mask": src_mask
+            "source_mask": src_mask,
+            "enc_self_attn": enc_self_attn,
         }
 
         return features

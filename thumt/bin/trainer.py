@@ -31,13 +31,15 @@ def parse_args(args=None):
     )
 
     # input files
-    parser.add_argument("--input", type=str, nargs=2,
+    # [src, tgt, pickle]
+    parser.add_argument("--input", type=str, nargs=3,
                         help="Path of source and target corpus")
     parser.add_argument("--output", type=str, default="train",
                         help="Path to saved models")
     parser.add_argument("--vocabulary", type=str, nargs=2,
                         help="Path of source and target vocabulary")
-    parser.add_argument("--validation", type=str,
+    # [src, pickle]
+    parser.add_argument("--validation", type=str, nargs=2,
                         help="Path of validation file")
     parser.add_argument("--references", type=str,
                         help="Pattern of reference files")
@@ -63,7 +65,7 @@ def parse_args(args=None):
 
 def default_params():
     params = utils.HParams(
-        input=["", ""],
+        input=["", "", ""],  # [src, tgt, pickle]
         output="",
         model="transformer",
         vocab=["", ""],
@@ -117,7 +119,7 @@ def default_params():
         decode_alpha=0.6,
         decode_ratio=1.0,
         decode_length=50,
-        validation="",
+        validation=["", ""], # [src, pickle]
         references="",
     )
 
@@ -367,8 +369,10 @@ def main(args):
     if dist.get_rank() == 0:
         print_variables(model)
 
+    # params.input: [src, tgt, pickle]
     dataset = data.get_dataset(params.input, "train", params)
 
+    # params.validation: [src, pickle]
     if params.validation:
         sorted_key, eval_dataset = data.get_dataset(
             params.validation, "infer", params)
