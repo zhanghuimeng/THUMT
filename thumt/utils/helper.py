@@ -19,53 +19,44 @@ def print_sentence(sentence, idx2word):
         raise ValueError("Can't handle more than 2 dimensions")
 
 
-def gen_typed_matrix(seq_q, seq_k, vocab_q, vocab_k):
-    nq = len(seq_q)
-    nk = len(seq_k)
-    nearest_q = [None] * nq
-    nearest_k = [None] * nk
-    stack = []
-    for i, x in enumerate(seq_q):
-        if vocab_q["tagtype"][x] == "start":
-            stack.append(vocab_q["tagcontent"][x])
-        elif vocab_q["tagtype"][x] == "end":
-            if len(stack) > 0:
-                nearest_q[i] = stack[-1]
-                stack.pop()
-        if len(stack) > 0 and nearest_q[i] is None:
-            nearest_q[i] = stack[-1]
-        # print("vocab=%s tagtype=%s tagcontent=%s" % (vocab_q["idx2word"][x], vocab_q["tagtype"][x], vocab_q["tagcontent"][x]))
-        # print(stack)
-    stack.clear()
-    for i, x in enumerate(seq_k):
-        if vocab_k["tagtype"][x] == "start":
-            stack.append(vocab_k["tagcontent"][x])
-        elif vocab_k["tagtype"][x] == "end":
-            if len(stack) > 0:
-                nearest_k[i] = stack[-1]
-                stack.pop()
-        if len(stack) > 0 and nearest_k[i] is None:
-            nearest_k[i] = stack[-1]
-    # 0: std, 1: in, 2: out
-    typed_matrix = np.zeros([3, nq, nk])
-    for i in range(nq):
-        for j in range(nk):
-            if nearest_q[i] is None:
-                typed_matrix[0][i][j] = 1
-                # print("0 ", end="")
-            elif nearest_q[i] == nearest_k[j]:
-                typed_matrix[1][i][j] = 1
-                # print("1 ", end="")
+def gen_typed_matrix_cpu(seq_q, seq_k, vocab_q, vocab_k):
+    batch, nq = seq_q.shape
+    _, nk = seq_k.shape
+    nearest_q = [["" for _ in range(nq)] for _ in range(batch)]
+    stack = [[] for _ in range(batch)]
+
+    for i in range(batch):
+        for j in range(nq):
+            x = seq_q[i][j]
+            if vocab_q["tag_type_str"][x] == "start":
+                stack[i].append(vocab_q["tag_content_str"][x])
+            if len(stack[i]) == 0:
+                nearest_q[i][j] = ""
             else:
-                typed_matrix[2][i][j] = 1
-                # print("2 ", end="")
-        # print()
-    # print(" ".join(["None" if s is None else s for s in nearest_q]))
-    # print_sentence(seq_q, vocab_q["idx2word"])
-    # print(" ".join(["None" if s is None else s for s in nearest_k]))
-    # print_sentence(seq_k, vocab_k["idx2word"])
-    # print()
-    return typed_matrix
+                nearest_q[i][j] = stack[i][-1]
+            if vocab_q["tag_type_str"][x] == "end" and len(stack[i]) > 0:
+                stack[i].pop()
+
+    typed_matrix = np.zeros([3, batch, nq, nk])
+    stack = [[] for _ in range(batch)]
+    for i in range(batch):
+        for j in range(nk):
+            x = seq_k[i][j]
+            if vocab_k["tag_type_str"][x] == "start":
+                stack[i].append(vocab_k["tag_content_str"][x])
+            for k in range(nq):
+                # 0: std, 1: in, 2: out
+                if nearest_q[i][k] == "":
+                    typed_matrix[0][i][k][j] = 1
+                elif nearest_q[i][k] in stack:
+                    typed_matrix[1][i][k][j] = 1
+                else:
+                    typed_matrix[2][i][k][j] = 1
+            if vocab_k["tag_type_str"][x] == "end" and len(stack[i]) > 0:
+                stack[i].pop()
+
+    return torch.from_numpy(typed_matrix).float().cuda()
+
 
 def gen_typed_matrix_batch(seq_q, seq_k, vocab_q, vocab_k):
     batch, lq = seq_q.shape
@@ -82,7 +73,7 @@ def gen_typed_matrix_batch(seq_q, seq_k, vocab_q, vocab_k):
     tag_content_k = torch.squeeze(tag_attr_k[:, :, 1])
 
     def update_nearest_matrix(l, tag_type, tag_content):
-        print("tag_type: %s" % str(tag_type.size()))
+        # print("tag_type: %s" % str(tag_type.size()))
         nearest = torch.zeros([batch, l]).long()
         stack = torch.full([batch, l], -1).long()
         stack_pointer = torch.ones([batch]).long()

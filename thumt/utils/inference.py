@@ -53,6 +53,7 @@ def _get_inference_fn(model_fns, features):
         local_features = {
             "source": features["source"],
             "source_mask": features["source_mask"],
+            "enc_self_attn": features["enc_self_attn"],
             "target": inputs,
             "target_mask": torch.ones(*inputs.shape).float().cuda()
         }
@@ -183,7 +184,7 @@ def beam_search(models, features, params):
 
     for model in models:
         state = model.empty_state(batch_size, device)
-        states.append(model.encode(features, state))
+        states.append(model.encode(features, state, "infer"))
         funcs.append(model.decode)
 
     # For source sequence length
@@ -203,6 +204,11 @@ def beam_search(models, features, params):
     features["source_mask"] = features["source_mask"].repeat([1, beam_size, 1])
     features["source_mask"] = torch.reshape(features["source_mask"],
                                        [batch_size * beam_size, seq_length])
+    # added enc_self_attn: [batch, lq, lq] => [batch * beam_size, lq, lq]
+    features["enc_self_attn"] = torch.unsqueeze(features["enc_self_attn"], 1)
+    features["enc_self_attn"] = features["enc_self_attn"].repeat([1, beam_size, 1, 1])
+    features["enc_self_attn"] = torch.reshape(features["enc_self_attn"],
+                                            [batch_size * beam_size, seq_length, seq_length])
 
     decoding_fn = _get_inference_fn(funcs, features)
 

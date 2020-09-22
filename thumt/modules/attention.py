@@ -5,6 +5,7 @@ from __future__ import absolute_import
 from __future__ import division
 from __future__ import print_function
 
+import time
 import torch
 import torch.nn as nn
 import torch.distributed as dist
@@ -12,7 +13,7 @@ import thumt.utils as utils
 
 from thumt.modules.module import Module
 from thumt.modules.affine import Affine
-from thumt.utils.helper import gen_typed_matrix, gen_typed_matrix_batch
+from thumt.utils.helper import gen_typed_matrix_cpu, gen_typed_matrix_batch
 
 
 class Attention(Module):
@@ -135,7 +136,8 @@ class MultiHeadAttention(MultiHeadAttentionBase):
 
         self.reset_parameters()
 
-    def forward(self, query, bias, seq_q, seq_k, vocab_q, vocab_k, memory=None, kv=None, mode="train", type="enc-self-attn"):
+    def forward(self, query, bias, seq_q, seq_k, vocab_q, vocab_k,
+                memory=None, kv=None, attn_mat=None, mode="train", type="enc-self-attn"):
         q = self.q_transform(query)
 
         if memory is not None:
@@ -158,45 +160,35 @@ class MultiHeadAttention(MultiHeadAttentionBase):
 
         # typed-attention matrix
         # TODO: need to modify to batched process
-        # typed_matrix = []
-        # for i in range(len(seq_q)):
-        #     # [3, nq, nk]
-        #     typed_matrix.append(torch.from_numpy(gen_typed_matrix(
-        #         seq_q=seq_q[i].cpu().numpy(),
-        #         seq_k=seq_k[i].cpu().numpy(),
-        #         vocab_q=vocab_q,
-        #         vocab_k=vocab_k
-        #     )).float())
-        #     # infer阶段的特殊处理
-        #     # q只有一个，但k和v仍然是整个sequence
-        #     if mode == "infer":
-        #         if type == "enc-dec-attn":
-        #             typed_matrix[-1] = typed_matrix[-1][:, -1:, :]
-        #         elif type == "dec-self-attn":
-        #             typed_matrix[-1] = typed_matrix[-1][:, -1:, :]
-        # typed_matrix = torch.stack(typed_matrix).cuda()
-        # typed_matrix = torch.transpose(typed_matrix, 1, 0)
-
+        # print("device: %d" % dist.get_rank())
+        # print(mode)
+        # print(type)
+        # print("q: %s" % str(list(q.size())))
+        # print("k: %s" % str(list(k.size())))
+        # print()
         # typed_matrix: [3, batch, length_q, length_k]
         # or: [3, batch, 1, length_k]
         # or: [3, batch, 1, 1]
-        typed_matrix = gen_typed_matrix_batch(seq_q, seq_k, vocab_q, vocab_k)
-        # patch for infer
-        if mode == "infer":
-            if type == "enc-dec-attn":
-                typed_matrix = typed_matrix[:, :, -1:, :]
-            elif type == "dec-self-attn":
-                typed_matrix = typed_matrix[:, :, -1:, :]
+        if attn_mat is not None:
+            typed_matrix = []
+            for i in range(3):
+                typed_matrix.append((attn_mat == i).float())
+            # typed_matrix: [3, batch, length_q, length_k]
+            typed_matrix = torch.stack(typed_matrix).cuda()
+        else:
+            # typed_matrix = gen_typed_matrix_batch(seq_q, seq_k, vocab_q, vocab_k)
+            typed_matrix = gen_typed_matrix_cpu(seq_q.cpu().numpy(), seq_k.cpu().numpy(),
+                                                vocab_q, vocab_k)
+            # patch for infer
+            if mode == "infer":
+                if type == "enc-dec-attn":
+                    typed_matrix = typed_matrix[:, :, -1:, :]
+                elif type == "dec-self-attn":
+                    typed_matrix = typed_matrix[:, :, -1:, :]
 
-        # if dist.get_rank() == 0:
-        #     print(mode)
-        #     print(type)
-        #     print(list(typed_matrix.size()))
-        #     print("q: %s" % str(list(q.size())))
-        #     print("k: %s" % str(list(k.size())))
-        #     utils.helper.print_sentence(seq_q, vocab_q["idx2word"])
-        #     utils.helper.print_sentence(seq_k, vocab_k["idx2word"])
-        #     print()
+        if list(typed_matrix.shape)[-2] != list(q.shape)[-2]:
+            utils.helper.print_sentence(seq_q, vocab_q["idx2word"])
+            exit(-1)
 
         # split heads
         # qh: [batch, heads, length_q, h2] or [batch, heads, 1, h2]

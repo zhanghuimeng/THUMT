@@ -218,16 +218,16 @@ def build_input_fn(filenames, mode, params):
         dataset = tf.data.Dataset.from_tensor_slices(
             tf.constant(sorted_data))
         enc_self_attn_dataset = tf.data.Dataset.from_generator(lambda: sorted_enc_self_attn, tf.int32)
+        dataset = tf.data.Dataset.zip((dataset, enc_self_attn_dataset))
         dataset = dataset.shard(torch.distributed.get_world_size(),
                                 torch.distributed.get_rank())
 
         dataset = dataset.map(
-            lambda x: tf.strings.split([x]).values,
+            lambda x, a: (tf.strings.split([x]).values, a),
             num_parallel_calls=tf.data.experimental.AUTOTUNE)
         dataset = dataset.map(
-            lambda x: tf.concat([x, [tf.constant(params.eos)]], axis=0),
+            lambda x, a: (tf.concat([x, [tf.constant(params.eos)]], axis=0), a),
             num_parallel_calls=tf.data.experimental.AUTOTUNE)
-        dataset = tf.data.Dataset.zip((dataset, enc_self_attn_dataset))
         dataset = dataset.map(
             lambda x, a: {
                 "source": x,

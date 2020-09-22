@@ -135,7 +135,8 @@ def _evaluate_model(model, sorted_key, dataset, references, params):
             except:
                 features = {
                     "source": torch.ones([1, 1]).long(),
-                    "source_mask": torch.ones([1, 1]).float()
+                    "source_mask": torch.ones([1, 1]).float(),
+                    "enc_self_attn": torch.ones([1, 1, 1]).float()
                 }
                 batch_size = 0
 
