@@ -22,19 +22,19 @@ def print_sentence(sentence, idx2word):
 def gen_typed_matrix_cpu(seq_q, seq_k, vocab_q, vocab_k):
     batch, nq = seq_q.shape
     _, nk = seq_k.shape
-    nearest_q = [["" for _ in range(nq)] for _ in range(batch)]
+    nearest_q = [[-1 for _ in range(nq)] for _ in range(batch)]
     stack = [[] for _ in range(batch)]
 
     for i in range(batch):
         for j in range(nq):
             x = seq_q[i][j]
-            if vocab_q["tag_type_str"][x] == "start":
-                stack[i].append(vocab_q["tag_content_str"][x])
+            if vocab_q["tag_type"][x] == -1:
+                stack[i].append(vocab_q["tag_content"][x])
             if len(stack[i]) == 0:
-                nearest_q[i][j] = ""
+                nearest_q[i][j] = -1
             else:
                 nearest_q[i][j] = stack[i][-1]
-            if vocab_q["tag_type_str"][x] == "end" and len(stack[i]) > 0:
+            if vocab_q["tag_type"][x] == 1 and len(stack[i]) > 0:
                 stack[i].pop()
 
     typed_matrix = np.zeros([3, batch, nq, nk])
@@ -42,17 +42,17 @@ def gen_typed_matrix_cpu(seq_q, seq_k, vocab_q, vocab_k):
     for i in range(batch):
         for j in range(nk):
             x = seq_k[i][j]
-            if vocab_k["tag_type_str"][x] == "start":
-                stack[i].append(vocab_k["tag_content_str"][x])
+            if vocab_k["tag_type"][x] == -1:
+                stack[i].append(vocab_k["tag_content"][x])
             for k in range(nq):
                 # 0: std, 1: in, 2: out
-                if nearest_q[i][k] == "":
+                if nearest_q[i][k] == -1:
                     typed_matrix[0][i][k][j] = 1
-                elif nearest_q[i][k] in stack:
+                elif nearest_q[i][k] in stack[i]:
                     typed_matrix[1][i][k][j] = 1
                 else:
                     typed_matrix[2][i][k][j] = 1
-            if vocab_k["tag_type_str"][x] == "end" and len(stack[i]) > 0:
+            if vocab_k["tag_type"][x] == 1 and len(stack[i]) > 0:
                 stack[i].pop()
 
     return torch.from_numpy(typed_matrix).float().cuda()

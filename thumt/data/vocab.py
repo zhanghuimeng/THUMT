@@ -39,64 +39,81 @@ def load_vocabulary(filename):
     return vocab, word2idx, idx2word
 
 
-def load_tagged_vocabulary(params, filename):
-    vocab = []
-    tag_type_str = []  # std, start, end
-    tag_type_id = []  # 0, -1, 1
-    tag_content_str = []  # "", a
-    tag_content_id = []  # ids
-    tag_content_dict = {}
+def load_tagged_vocabulary(filenames):
+    vocab1 = []
+    with open(filenames[0], "r") as f:
+        for line in f:
+            vocab1.append(line.strip())
+    vocab2 = []
+    with open(filenames[1], "r") as f:
+        for line in f:
+            vocab2.append(line.strip())
 
-    def get_id(i, tag):
-        if tag in tag_content_dict:
-            return tag_content_dict[tag]
-        tag_content_dict[tag] = i
-        return i
+    src_word2idx = {}
+    src_idx2word = {}
+    tgt_word2idx = {}
+    tgt_idx2word = {}
+    for idx, word in enumerate(vocab1):
+        src_word2idx[word] = idx
+        src_idx2word[idx] = word
+    for idx, word in enumerate(vocab2):
+        tgt_word2idx[word] = idx
+        tgt_idx2word[idx] = word
 
-    with open(filename, "r") as fd:
-        for i, line in enumerate(fd):
-            vocab.append(line.strip())
-            if vocab[-1] == params.pad or vocab[-1] == params.bos or vocab[-1] == params.eos or vocab[-1] == params.unk:
-                tag_type_str.append("std")
-                tag_type_id.append(0)
-                tag_content_str.append("")
-                tag_content_id.append(-1)
-                continue
-            match_obj = re.match(r"<(/)?(\w*)>", vocab[-1])
-            if match_obj:
-                tag_content_str.append(match_obj.group(2))
-                if match_obj.group(1) == "/":
-                    tag_type_str.append("end")
-                    tag_type_id.append(1)
-                    tag_content_id.append(get_id(i, tag_content_str[-1]))
-                else:
-                    tag_type_str.append("start")
-                    tag_type_id.append(-1)
-                    tag_content_id.append(get_id(i, tag_content_str[-1]))
+    src_tag_id_dict = {}  # >= 0
+    prog = re.compile(r"<(/)?(\w*)>")
+    id_cnt = 0
+    tag_id_dict = {}
+    src_tag_type_dict = {} # 0=None, -1=start, 1=end
+    for i, token in enumerate(vocab1):
+        match_obj = prog.match(token)
+        if match_obj:
+            if not token in tag_id_dict:
+                tag_id_dict[token] = id_cnt
+                id_cnt = id_cnt + 1
+            if match_obj.group(1) == "/":
+                src_tag_type_dict[i] = 1
             else:
-                tag_type_str.append("std")
-                tag_type_id.append(0)
-                tag_content_str.append("")
-                tag_content_id.append(-1)
+                src_tag_type_dict[i] = -1
+        else:
+            src_tag_type_dict[i] = 0
+    tgt_tag_type_dict = {} # 0=None, -1=start, 1=end
+    for i, token in enumerate(vocab2):
+        match_obj = prog.match(token)
+        if match_obj:
+            # assert the tags are the same
+            if match_obj.group(1) == "/":
+                tgt_tag_type_dict[i] = 1
+            else:
+                tgt_tag_type_dict[i] = -1
+        else:
+            tgt_tag_type_dict[i] = 0
 
-            # if match_obj:
-            #     print("vocab=%s tagtype=(%s, %d) tagcontent=(%s, %d)" %
-            #           (vocab[-1], tag_type_str[-1], tag_type_id[-1], tag_content_str[-1], tag_content_id[-1]))
-
-    word2idx = {}
-    idx2word = {}
-
-    for idx, word in enumerate(vocab):
-        word2idx[word] = idx
-        idx2word[idx] = word
+    src_tag_id_dict = {}
+    tgt_tag_id_dict = {}
+    for i, token in enumerate(vocab1):
+        if token in tag_id_dict:
+            src_tag_id_dict[i] = tag_id_dict[token]
+        else:
+            src_tag_id_dict[i] = -1
+    for i, token in enumerate(vocab2):
+        if token in tag_id_dict:
+            tgt_tag_id_dict[i] = tag_id_dict[token]
+        else:
+            tgt_tag_id_dict[i] = -1
 
     return {
-        "vocab": vocab,
-        "word2idx": word2idx,
-        "idx2word": idx2word,
-        "tag_type_str": tag_type_str,
-        "tag_content_str": tag_content_str,
-        "tag_attr": torch.transpose(torch.LongTensor([tag_type_id, tag_content_id]), 1, 0)
+        "vocab": vocab1,
+        "word2idx": src_word2idx,
+        "idx2word": src_idx2word,
+        "tag_type": src_tag_type_dict,
+        "tag_content": src_tag_id_dict,
+    }, {
+        "vocab": vocab2,
+        "word2idx": tgt_word2idx,
+        "idx2word": tgt_idx2word,
+        "tag_type": tgt_tag_type_dict,
+        "tag_content": tgt_tag_id_dict,
     }
 
 

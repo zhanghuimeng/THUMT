@@ -7,6 +7,7 @@ from __future__ import print_function
 
 import math
 import logging
+import numpy as np
 import torch
 import torch.nn as nn
 
@@ -206,8 +207,8 @@ class Transformer(modules.Module):
         self.params = params
 
         # add vocabulary of source and target
-        self.src_vocabulary = data.vocab.load_tagged_vocabulary(params, params.vocab[0])
-        self.tgt_vocabulary = data.vocab.load_tagged_vocabulary(params, params.vocab[1])
+        self.src_vocabulary, self.tgt_vocabulary = \
+            data.vocab.load_tagged_vocabulary(params.vocab)
         # for i, token in enumerate(self.tgt_vocabulary["vocab"]):
         #     if "<" in token:
         #         print(token)
@@ -336,9 +337,6 @@ class Transformer(modules.Module):
         if mode == "infer":
             decoder_input = decoder_input[:, -1:, :]
             dec_attn_bias = dec_attn_bias[:, :, -1:, :]
-            # print("modified infer sentence")
-            # utils.helper.print_sentence(tgt_seq[:, -1:], self.tgt_vocabulary["idx2word"])
-            # print()
 
         decoder_output = self.decoder(x=decoder_input, attn_bias=dec_attn_bias,
                                       encdec_bias=enc_attn_bias, memory=encoder_output,
@@ -381,6 +379,20 @@ class Transformer(modules.Module):
                     "v": torch.zeros([batch_size, 0, self.hidden_size],
                                      device=device)
                 } for i in range(self.num_decoder_layers)
+            },
+            "typed_matrix": {
+                "dec_self_attn": {
+                    "mat": None,
+                    "stack": np.full([batch_size, 300], -1, np.int),
+                    "stack_pointer": np.full([batch_size], 0, np.int),
+                    "stack_history": np.full([batch_size, 100, 100], -1),
+                },
+                "enc_dec_attn": {
+                    "mat": None,
+                    "stack_q": np.full([batch_size, 300], -1, np.int),
+                    "nearest_q": np.full([batch_size, 300], -1, np.int),
+                    "stack_k_history": np.full([batch_size], -1, np.int),
+                }
             }
         }
 
