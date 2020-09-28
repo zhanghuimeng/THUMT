@@ -60,61 +60,71 @@ def load_tagged_vocabulary(filenames):
         tgt_word2idx[word] = idx
         tgt_idx2word[idx] = word
 
-    src_tag_id_dict = {}  # >= 0
     prog = re.compile(r"<(/)?(\w*)>")
     id_cnt = 0
     tag_id_dict = {}
-    src_tag_type_dict = {} # 0=None, -1=start, 1=end
+    src_tag_type_dict = {}  # 0=None, -1=start, 1=end
+    src_tag_content_dict = {}
     for i, token in enumerate(vocab1):
         match_obj = prog.match(token)
         if match_obj:
-            if not token in tag_id_dict:
-                tag_id_dict[token] = id_cnt
+            content = match_obj.group(2)
+            src_tag_content_dict[i] = content
+            if content not in tag_id_dict:
+                tag_id_dict[content] = id_cnt
                 id_cnt = id_cnt + 1
             if match_obj.group(1) == "/":
                 src_tag_type_dict[i] = 1
             else:
                 src_tag_type_dict[i] = -1
         else:
+            src_tag_content_dict[i] = ""
             src_tag_type_dict[i] = 0
-    tgt_tag_type_dict = {} # 0=None, -1=start, 1=end
+    tgt_tag_type_dict = {}  # 0=None, -1=start, 1=end
+    tgt_tag_content_dict = {}
     for i, token in enumerate(vocab2):
         match_obj = prog.match(token)
         if match_obj:
             # assert the tags are the same
+            content = match_obj.group(2)
+            tgt_tag_content_dict[i] = content
+            if content not in tag_id_dict:
+                tag_id_dict[content] = id_cnt
+                id_cnt = id_cnt + 1
             if match_obj.group(1) == "/":
                 tgt_tag_type_dict[i] = 1
             else:
                 tgt_tag_type_dict[i] = -1
         else:
+            tgt_tag_content_dict[i] = ""
             tgt_tag_type_dict[i] = 0
 
     src_tag_id_dict = {}
     tgt_tag_id_dict = {}
     for i, token in enumerate(vocab1):
-        if token in tag_id_dict:
-            src_tag_id_dict[i] = tag_id_dict[token]
+        if src_tag_content_dict[i] in tag_id_dict:
+            src_tag_id_dict[i] = tag_id_dict[src_tag_content_dict[i]]
         else:
             src_tag_id_dict[i] = -1
     for i, token in enumerate(vocab2):
-        if token in tag_id_dict:
-            tgt_tag_id_dict[i] = tag_id_dict[token]
+        if tgt_tag_content_dict[i] in tag_id_dict:
+            tgt_tag_id_dict[i] = tag_id_dict[tgt_tag_content_dict[i]]
         else:
             tgt_tag_id_dict[i] = -1
 
     return {
-        "vocab": vocab1,
-        "word2idx": src_word2idx,
-        "idx2word": src_idx2word,
-        "tag_type": src_tag_type_dict,
-        "tag_content": src_tag_id_dict,
-    }, {
-        "vocab": vocab2,
-        "word2idx": tgt_word2idx,
-        "idx2word": tgt_idx2word,
-        "tag_type": tgt_tag_type_dict,
-        "tag_content": tgt_tag_id_dict,
-    }
+               "vocab": vocab1,
+               "word2idx": src_word2idx,
+               "idx2word": src_idx2word,
+               "tag_type": src_tag_type_dict,
+               "tag_content": src_tag_id_dict,
+           }, {
+               "vocab": vocab2,
+               "word2idx": tgt_word2idx,
+               "idx2word": tgt_idx2word,
+               "tag_type": tgt_tag_type_dict,
+               "tag_content": tgt_tag_id_dict,
+           }
 
 
 def lookup(inputs, mode, params):
