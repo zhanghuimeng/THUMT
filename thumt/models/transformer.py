@@ -371,6 +371,7 @@ class Transformer(modules.Module):
         return torch.sum(loss * mask) / torch.sum(mask)
 
     def empty_state(self, batch_size, device):
+        max_length = 512 # TODO: where to set?
         state = {
             "decoder": {
                 "layer_%d" % i: {
@@ -381,17 +382,16 @@ class Transformer(modules.Module):
                 } for i in range(self.num_decoder_layers)
             },
             "typed_matrix": {
+                "stack_q": np.full([batch_size, max_length], -1, np.int32),
+                "stack_pointer_q": np.full([batch_size], 0, np.int32),
+                "nearest_q": np.full([batch_size, max_length], -1, np.int32),
                 "dec_self_attn": {
-                    "mat": None,
-                    "stack": np.full([batch_size, 300], -1, np.int),
-                    "stack_pointer": np.full([batch_size], 0, np.int),
-                    "stack_history": np.full([batch_size, 100, 100], -1),
+                    "mat": np.zeros([3, batch_size, max_length, max_length], np.int32),
+                    "stack_history_k": np.full([batch_size, max_length, max_length], -1, np.int32),
                 },
                 "enc_dec_attn": {
-                    "mat": None,
-                    "stack_q": np.full([batch_size, 300], -1, np.int),
-                    "nearest_q": np.full([batch_size, 300], -1, np.int),
-                    "stack_k_history": np.full([batch_size], -1, np.int),
+                    "mat": np.zeros([3, batch_size, max_length, max_length], np.int32),
+                    "stack_history_k": np.full([batch_size, max_length, max_length], -1, np.int32),
                 }
             }
         }

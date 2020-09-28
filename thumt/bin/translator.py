@@ -109,6 +109,7 @@ def override_params(params, args):
 
     src_vocab, src_w2idx, src_idx2w = data.load_vocabulary(args.vocabulary[0])
     tgt_vocab, tgt_w2idx, tgt_idx2w = data.load_vocabulary(args.vocabulary[1])
+    params.vocab = args.vocabulary
 
     params.vocabulary = {
         "source": src_vocab, "target": tgt_vocab
@@ -190,10 +191,10 @@ def main(args):
 
             model_list.append(model)
 
-        if len(args.input) == 1:
+        if len(args.input) == 2:
             mode = "infer"
             sorted_key, dataset = data.get_dataset(
-                args.input[0], mode, params)
+                args.input, mode, params)
         else:
             # Teacher-forcing
             mode = "eval"
@@ -225,7 +226,8 @@ def main(args):
             except:
                 features = {
                     "source": torch.ones([1, 1]).long(),
-                    "source_mask": torch.ones([1, 1]).float()
+                    "source_mask": torch.ones([1, 1]).float(),
+                    "enc_self_attn": torch.ones([1, 1, 1]).float()
                 }
 
                 if mode == "eval":

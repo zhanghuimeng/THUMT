@@ -55,7 +55,7 @@ def gen_typed_matrix_cpu(seq_q, seq_k, vocab_q, vocab_k):
             if vocab_k["tag_type"][x] == 1 and len(stack[i]) > 0:
                 stack[i].pop()
 
-    return torch.from_numpy(typed_matrix).float().cuda()
+    return torch.from_numpy(typed_matrix).int().cuda()
 
 
 def gen_typed_matrix_batch(seq_q, seq_k, vocab_q, vocab_k):
@@ -131,3 +131,114 @@ def gen_typed_matrix_batch(seq_q, seq_k, vocab_q, vocab_k):
     #     print()
 
     return torch.stack([typed_matrix_0, typed_matrix_1, typed_matrix_2])
+
+
+# seq: [batch]
+# stack: [batch, max_length]
+# pointer: [batch]
+# vocab: dict
+def stack_push_batch_cpu(seq, stack, pointer, vocab):
+    batch_size = seq.shape[0]
+    for i in range(batch_size):
+        if vocab["tag_type"][seq[i]] == -1:
+            stack[i][pointer[i]] = vocab["tag_content"][seq[i]]
+            pointer[i] += 1
+
+
+# seq: [batch]
+# stack: [batch, max_length]
+# pointer: [batch]
+# vocab: dict
+def stack_pop_batch_cpu(seq, stack, pointer, vocab):
+    batch_size = seq.shape[0]
+    for i in range(batch_size):
+        if vocab["tag_type"][seq[i]] == 1 and pointer[i] > 0:
+            stack[i][pointer[i] - 1] = -1 # for stack_history
+            pointer[i] -= 1
+
+
+# calculate batches of stack history (used for src)
+# seq: [batch, length]
+# stack_history: [batch, max_length, max_length]
+# vocab: dict
+def calc_stack_history_batch_cpu(seq, stack_history, vocab):
+    batch_size, length = seq.shape
+    max_length = stack_history.shape[1]
+    stack = np.full([batch_size, max_length], -1, np.int)
+    stack_pointer = np.full([batch_size], 0, np.int)
+    for i in range(length):
+        stack_push_batch_cpu(
+            seq=seq[:, i],
+            stack=stack,
+            pointer=stack_pointer,
+            vocab=vocab,
+        )
+        stack_history[:, i, :] = stack
+        stack_pop_batch_cpu(
+            seq=seq[:, i],
+            stack=stack,
+            pointer=stack_pointer,
+            vocab=vocab,
+        )
+
+
+def calc_nearest_batch_cpu(stack, pointer):
+    tmp_pointer = np.maximum(0, pointer - 1)
+    return stack[:, tmp_pointer]
+
+
+def check_in_stack_history(stack_history_k, tag, batch_idx, idx):
+    for i in range(stack_history_k.shape[-1]):
+        if stack_history_k[batch_idx][idx][i] == -1:
+            break
+        if tag == stack_history_k[batch_idx][idx][i]:
+            return True
+    return False
+
+
+def update_tgt_stack_batch_cpu(step, seq, stack,
+                               stack_pointer, nearest_q,
+                               stack_history_k=None, vocab=None):
+    # update stack and history
+    stack_push_batch_cpu(seq, stack, stack_pointer, vocab)
+    nearest_q[:, step] = calc_nearest_batch_cpu(stack, stack_pointer)
+    if stack_history_k is not None:
+        stack_history_k[:, step, :] = stack
+    stack_pop_batch_cpu(seq, stack, stack_pointer, vocab)
+
+
+def update_dec_self_attn_batch_cpu(step, batch_size, mat,
+                                   nearest_q, stack_history_k):
+    # update mat
+    for i in range(batch_size):
+        for j in range(step + 1):
+            # the down part
+            if nearest_q[i][step] == -1:
+                mat[0][i][step][j] = 1
+            elif check_in_stack_history(stack_history_k,
+                                        nearest_q[i][step], i, j):
+                mat[1][i][step][j] = 1
+            else:
+                mat[2][i][step][j] = 1
+            # the right part
+            if nearest_q[i][j] == -1:
+                mat[0][i][j][step] = 1
+            elif check_in_stack_history(stack_history_k,
+                                        nearest_q[i][j], i, step):
+                mat[1][i][j][step] = 1
+            else:
+                mat[2][i][j][step] = 1
+
+
+def update_enc_dec_attn_batch_cpu(step, batch_size, length_k, mat,
+                                  nearest_q, stack_history_k):
+    # update mat
+    for i in range(batch_size):
+        for j in range(length_k):
+            if nearest_q[i][step] == -1:
+                mat[0][i][step][j] = 1
+            elif check_in_stack_history(stack_history_k,
+                                        nearest_q[i][step], i, j):
+                mat[1][i][step][j] = 1
+            else:
+                mat[2][i][step][j] = 1

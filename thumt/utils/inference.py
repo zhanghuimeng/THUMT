@@ -6,41 +6,75 @@ from __future__ import division
 from __future__ import print_function
 
 import math
+import numpy as np
 import torch
 import tensorflow as tf
 
 from collections import namedtuple
 from thumt.utils.nest import map_structure
+import thumt.data as data
+import thumt.utils.helper as helper
 
 
 def _merge_first_two_dims(tensor):
-    shape = list(tensor.shape)
-    shape[1] *= shape[0]
-    return torch.reshape(tensor, shape[1:])
+    if isinstance(tensor, torch.Tensor):
+        shape = list(tensor.shape)
+        shape[1] *= shape[0]
+        return torch.reshape(tensor, shape[1:])
+    elif isinstance(tensor, np.ndarray):
+        shape = list(tensor.shape)
+        shape[1] *= shape[0]
+        return np.reshape(tensor, shape[1:])
+    else:
+        raise ValueError("Unknown tensor type")
 
 
 def _split_first_two_dims(tensor, dim_0, dim_1):
-    shape = [dim_0, dim_1] + list(tensor.shape)[1:]
-    return torch.reshape(tensor, shape)
+    if isinstance(tensor, torch.Tensor):
+        shape = [dim_0, dim_1] + list(tensor.shape)[1:]
+        return torch.reshape(tensor, shape)
+    elif isinstance(tensor, np.ndarray):
+        shape = [dim_0, dim_1] + list(tensor.shape)[1:]
+        return np.reshape(tensor, shape)
+    else:
+        raise ValueError("Unknown tensor type")
 
 
 def _tile_to_beam_size(tensor, beam_size):
-    tensor = torch.unsqueeze(tensor, 1)
-    tile_dims = [1] * int(tensor.dim())
-    tile_dims[1] = beam_size
-
-    return tensor.repeat(tile_dims)
+    if isinstance(tensor, torch.Tensor):
+        tensor = torch.unsqueeze(tensor, 1)
+        tile_dims = [1] * int(tensor.dim())
+        tile_dims[1] = beam_size
+        return tensor.repeat(tile_dims)
+    elif isinstance(tensor, np.ndarray):
+        tensor = np.expand_dims(tensor, 1)
+        tile_dims = [1] * int(tensor.ndim)
+        tile_dims[1] = beam_size
+        return np.tile(tensor, tile_dims)
+    else:
+        raise ValueError("Unknown tensor type")
 
 
 def _gather_2d(params, indices, name=None):
-    batch_size = params.shape[0]
-    range_size = indices.shape[1]
-    batch_pos = torch.arange(batch_size * range_size, device=params.device)
-    batch_pos = batch_pos // range_size
-    batch_pos = torch.reshape(batch_pos, [batch_size, range_size])
-    output = params[batch_pos, indices]
+    if isinstance(params, torch.Tensor):
+        batch_size = params.shape[0]
+        range_size = indices.shape[1]
+        batch_pos = torch.arange(batch_size * range_size, device=params.device)
+        batch_pos = batch_pos // range_size
+        batch_pos = torch.reshape(batch_pos, [batch_size, range_size])
+        output = params[batch_pos, indices]
 
-    return output
+        return output
+    elif isinstance(params, np.ndarray):
+        batch_size = params.shape[0]
+        range_size = indices.shape[1]
+        batch_pos = np.arange(batch_size * range_size)
+        batch_pos = batch_pos // range_size
+        batch_pos = np.reshape(batch_pos, [batch_size, range_size])
+        output = params[batch_pos, indices.cpu().numpy()]
+        return output
+    else:
+        raise ValueError("Unknown tensor type")
 
 
 class BeamSearchState(namedtuple("BeamSearchState",
@@ -187,6 +221,20 @@ def beam_search(models, features, params):
         states.append(model.encode(features, state, "infer"))
         funcs.append(model.decode)
 
+    # initialize the stacks in model
+    src_vocabulary, tgt_vocabulary = \
+        data.vocab.load_tagged_vocabulary(params.vocab)
+    seq_k = features["source"].cpu().numpy()
+    length_k = features["source"].shape[1]
+    for state in states:
+        # initialize enc_dec_attn
+        stack_history_k = state["typed_matrix"]["enc_dec_attn"]["stack_history_k"]
+        helper.calc_stack_history_batch_cpu(
+            seq=seq_k,
+            stack_history=stack_history_k,
+            vocab=src_vocabulary
+        )
+
     # For source sequence length
     max_length = features["source_mask"].sum(1) * decode_ratio
     max_length = max_length.long() + decode_length
@@ -219,6 +267,8 @@ def beam_search(models, features, params):
     # Initial beam search state
     init_seqs = torch.full([batch_size, beam_size, 1], bos_id, device=device)
     init_seqs = init_seqs.long()
+    # initialize typed_matrix
+
     init_log_probs = init_seqs.new_tensor(
         [[0.] + [min_val] * (beam_size - 1)], dtype=torch.float32)
     init_log_probs = init_log_probs.repeat([batch_size, 1])
