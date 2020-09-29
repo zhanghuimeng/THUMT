@@ -184,7 +184,7 @@ def calc_stack_history_batch_cpu(seq, stack_history, vocab):
 
 def calc_nearest_batch_cpu(stack, pointer):
     tmp_pointer = np.maximum(0, pointer - 1)
-    return stack[:, tmp_pointer]
+    return stack[range(stack.shape[0]), tmp_pointer]
 
 
 def check_in_stack_history(stack_history_k, tag, batch_idx, idx):
@@ -196,6 +196,11 @@ def check_in_stack_history(stack_history_k, tag, batch_idx, idx):
     return False
 
 
+# seq: [batch]
+# stack: [batch, max_length]
+# pointer: [batch]
+# nearest_q: [batch, max_length]
+# vocab: dict
 def update_tgt_stack_batch_cpu(step, seq, stack,
                                stack_pointer, nearest_q,
                                stack_history_k=None, vocab=None):
@@ -207,8 +212,12 @@ def update_tgt_stack_batch_cpu(step, seq, stack,
     stack_pop_batch_cpu(seq, stack, stack_pointer, vocab)
 
 
-def update_dec_self_attn_batch_cpu(step, batch_size, mat,
+# mat: [3, batch, max_length, max_length]
+# nearest_q: [batch, max_length]
+# stack_history: [batch, max_length, max_length]
+def update_dec_self_attn_batch_cpu(step, mat,
                                    nearest_q, stack_history_k):
+    batch_size = mat.shape[1]
     # update mat
     for i in range(batch_size):
         for j in range(step + 1):
@@ -230,8 +239,12 @@ def update_dec_self_attn_batch_cpu(step, batch_size, mat,
                 mat[2][i][j][step] = 1
 
 
-def update_enc_dec_attn_batch_cpu(step, batch_size, length_k, mat,
+# mat: [3, batch, max_length, max_length]
+# nearest_q: [batch, max_length]
+# stack_history: [batch, max_length, max_length]
+def update_enc_dec_attn_batch_cpu(step, length_k, mat,
                                   nearest_q, stack_history_k):
+    batch_size = mat.shape[1]
     # update mat
     for i in range(batch_size):
         for j in range(length_k):
@@ -242,3 +255,8 @@ def update_enc_dec_attn_batch_cpu(step, batch_size, length_k, mat,
                 mat[1][i][step][j] = 1
             else:
                 mat[2][i][step][j] = 1
+
+
+def print_state(step):
+    # TODO
+    pass
