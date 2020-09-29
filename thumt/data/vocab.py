@@ -65,9 +65,11 @@ def load_tagged_vocabulary(filenames):
     tag_id_dict = {}
     src_tag_type_dict = {}  # 0=None, -1=start, 1=end
     src_tag_content_dict = {}
+    # TODO: use parameters
+    ctrl_tokens = ["<eos>", "<bos>", "<pad>", "<unk>"]
     for i, token in enumerate(vocab1):
         match_obj = prog.match(token)
-        if match_obj:
+        if match_obj and token not in ctrl_tokens:
             content = match_obj.group(2)
             src_tag_content_dict[i] = content
             if content not in tag_id_dict:
@@ -84,7 +86,7 @@ def load_tagged_vocabulary(filenames):
     tgt_tag_content_dict = {}
     for i, token in enumerate(vocab2):
         match_obj = prog.match(token)
-        if match_obj:
+        if match_obj and token not in ctrl_tokens:
             # assert the tags are the same
             content = match_obj.group(2)
             tgt_tag_content_dict[i] = content

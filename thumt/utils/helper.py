@@ -139,6 +139,8 @@ def gen_typed_matrix_batch(seq_q, seq_k, vocab_q, vocab_k):
 # vocab: dict
 def stack_push_batch_cpu(seq, stack, pointer, vocab):
     batch_size = seq.shape[0]
+    # print(seq.shape)
+    # print(stack.shape)
     for i in range(batch_size):
         if vocab["tag_type"][seq[i]] == -1:
             stack[i][pointer[i]] = vocab["tag_content"][seq[i]]
@@ -212,51 +214,61 @@ def update_tgt_stack_batch_cpu(step, seq, stack,
     stack_pop_batch_cpu(seq, stack, stack_pointer, vocab)
 
 
-# mat: [3, batch, max_length, max_length]
+# mat: [batch, max_length, max_length]
 # nearest_q: [batch, max_length]
 # stack_history: [batch, max_length, max_length]
 def update_dec_self_attn_batch_cpu(step, mat,
                                    nearest_q, stack_history_k):
-    batch_size = mat.shape[1]
+    batch_size = mat.shape[0]
     # update mat
     for i in range(batch_size):
         for j in range(step + 1):
             # the down part
             if nearest_q[i][step] == -1:
-                mat[0][i][step][j] = 1
+                mat[i][step][j] = 1
             elif check_in_stack_history(stack_history_k,
                                         nearest_q[i][step], i, j):
-                mat[1][i][step][j] = 1
+                mat[i][step][j] = 2
             else:
-                mat[2][i][step][j] = 1
+                mat[i][step][j] = 3
             # the right part
             if nearest_q[i][j] == -1:
-                mat[0][i][j][step] = 1
+                mat[i][j][step] = 1
             elif check_in_stack_history(stack_history_k,
                                         nearest_q[i][j], i, step):
-                mat[1][i][j][step] = 1
+                mat[i][j][step] = 2
             else:
-                mat[2][i][j][step] = 1
+                mat[i][j][step] = 3
 
 
-# mat: [3, batch, max_length, max_length]
+# mat: [batch, max_length, max_length]
 # nearest_q: [batch, max_length]
 # stack_history: [batch, max_length, max_length]
 def update_enc_dec_attn_batch_cpu(step, length_k, mat,
                                   nearest_q, stack_history_k):
-    batch_size = mat.shape[1]
+    batch_size = mat.shape[0]
     # update mat
     for i in range(batch_size):
         for j in range(length_k):
             if nearest_q[i][step] == -1:
-                mat[0][i][step][j] = 1
+                mat[i][step][j] = 1
             elif check_in_stack_history(stack_history_k,
                                         nearest_q[i][step], i, j):
-                mat[1][i][step][j] = 1
+                mat[i][step][j] = 2
             else:
-                mat[2][i][step][j] = 1
+                mat[i][step][j] = 3
 
 
-def print_state(step):
-    # TODO
-    pass
+def print_state(step, length_src, state):
+    print("stack_q: ")
+    print(state["typed_matrix"]["stack_q"][:, :max(state["typed_matrix"]["stack_pointer_q"])])
+    print("nearest_q: ")
+    print(state["typed_matrix"]["nearest_q"][:, :step + 1])
+
+    print("dec_self_attn mat: ")
+    print(state["typed_matrix"]["dec_self_attn"]["mat"][:, :step + 1, :step + 1].shape)
+    print(state["typed_matrix"]["dec_self_attn"]["mat"][:, :step + 1, :step + 1])
+    print("enc_dec_attn mat: ")
+    print(state["typed_matrix"]["enc_dec_attn"]["mat"][:, :step + 1, :length_src].shape)
+    print(state["typed_matrix"]["enc_dec_attn"]["mat"][:, :step + 1, :length_src])
+    print()
