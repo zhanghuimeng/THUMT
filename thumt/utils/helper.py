@@ -139,8 +139,6 @@ def gen_typed_matrix_batch(seq_q, seq_k, vocab_q, vocab_k):
 # vocab: dict
 def stack_push_batch_cpu(seq, stack, pointer, vocab):
     batch_size = seq.shape[0]
-    # print(seq.shape)
-    # print(stack.shape)
     for i in range(batch_size):
         if vocab["tag_type"][seq[i]] == -1:
             stack[i][pointer[i]] = vocab["tag_content"][seq[i]]
@@ -259,6 +257,7 @@ def update_enc_dec_attn_batch_cpu(step, length_k, mat,
                 mat[i][step][j] = 3
 
 
+# helper print function
 def print_state(step, length_src, state):
     print("stack_q: ")
     print(state["typed_matrix"]["stack_q"][:, :max(state["typed_matrix"]["stack_pointer_q"])])
@@ -270,3 +269,27 @@ def print_state(step, length_src, state):
     print("enc_dec_attn mat: ")
     print(state["typed_matrix"]["enc_dec_attn"]["mat"][:, :step + 1, :length_src])
     print()
+
+
+def check_beam_search(src_seq, src_vocab, tgt_seq, tgt_vocab,
+                      dec_self_attn, enc_dec_attn):
+    dec_self_attn_0 = gen_typed_matrix_cpu(
+        tgt_seq, tgt_seq, tgt_vocab, tgt_vocab).cpu().numpy()
+    enc_dec_attn_0 = gen_typed_matrix_cpu(
+        tgt_seq, src_seq, tgt_vocab, src_vocab).cpu().numpy()
+
+    def merge_attn_mat(tensor):
+        return np.squeeze(tensor[0]) * 1 + np.squeeze(tensor[1]) * 2 + np.squeeze(tensor[2]) * 3
+
+    dec_self_attn_0 = merge_attn_mat(dec_self_attn_0)
+    enc_dec_attn_0 = merge_attn_mat(enc_dec_attn_0)
+
+    if not (dec_self_attn_0 == dec_self_attn).all():
+        print(dec_self_attn_0)
+        print(dec_self_attn)
+        exit(1)
+
+    if not (enc_dec_attn_0 == enc_dec_attn).all():
+        print(enc_dec_attn_0)
+        print(enc_dec_attn)
+        exit(1)

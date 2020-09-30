@@ -369,6 +369,16 @@ def beam_search(models, features, params):
         cond = torch.gt(worst_finished_score, best_alive_score)
         is_finished = bool(cond)
 
+        # helper.check_beam_search(
+        #     src_seq=features["source"].cpu().numpy(),
+        #     src_vocab=src_vocabulary,
+        #     tgt_seq=_merge_first_two_dims(state.inputs[0]).cpu().numpy(),
+        #     tgt_vocab=tgt_vocabulary,
+        #     dec_self_attn=_merge_first_two_dims(state.state[0]["typed_matrix"]["dec_self_attn"]["mat"])[:, :time + 2, :time + 2],
+        #     enc_dec_attn=_merge_first_two_dims(state.state[0]["typed_matrix"]["enc_dec_attn"]["mat"])[:, :time + 2, :length_src],
+        # )
+        # print("check ok")
+
         if is_finished:
             break
 
