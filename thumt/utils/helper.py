@@ -266,9 +266,7 @@ def print_state(step, length_src, state):
     print(state["typed_matrix"]["nearest_q"][:, :step + 1])
 
     print("dec_self_attn mat: ")
-    print(state["typed_matrix"]["dec_self_attn"]["mat"][:, :step + 1, :step + 1].shape)
     print(state["typed_matrix"]["dec_self_attn"]["mat"][:, :step + 1, :step + 1])
     print("enc_dec_attn mat: ")
-    print(state["typed_matrix"]["enc_dec_attn"]["mat"][:, :step + 1, :length_src].shape)
     print(state["typed_matrix"]["enc_dec_attn"]["mat"][:, :step + 1, :length_src])
     print()

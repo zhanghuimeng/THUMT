@@ -9,6 +9,7 @@ import math
 import numpy as np
 import torch
 import tensorflow as tf
+from time import time as python_time
 
 from collections import namedtuple
 from thumt.utils.nest import map_structure
@@ -83,7 +84,7 @@ class BeamSearchState(namedtuple("BeamSearchState",
 
 
 def _get_inference_fn(model_fns, features):
-    def inference_fn(inputs, state):
+    def inference_fn(inputs, state, step):
         local_features = {
             "source": features["source"],
             "source_mask": features["source_mask"],
@@ -94,9 +95,16 @@ def _get_inference_fn(model_fns, features):
 
         outputs = []
         next_state = []
+        length_k = features["source"].shape[-1]
 
         for (model_fn, model_state) in zip(model_fns, state):
             if model_state:
+                dec_self_attn = torch.from_numpy(
+                    model_state["typed_matrix"]["dec_self_attn"]["mat"][:, step, np.newaxis, :step + 1]).cuda()
+                enc_dec_attn = torch.from_numpy(
+                    model_state["typed_matrix"]["enc_dec_attn"]["mat"][:, step, np.newaxis, :length_k]).cuda()
+                local_features["dec_self_attn"] = dec_self_attn
+                local_features["enc_dec_attn"] = enc_dec_attn
                 logits, new_state = model_fn(local_features, model_state)
                 outputs.append(torch.nn.functional.log_softmax(logits,
                                                                dim=-1))
@@ -116,12 +124,13 @@ def _get_inference_fn(model_fns, features):
 
 
 def _beam_search_step(time, func, state, batch_size, beam_size, alpha,
-                      pad_id, eos_id, max_length, inf=-1e9):
+                      pad_id, eos_id, max_length, inf=-1e9, vocab=None,
+                      length_src=None):
     # Compute log probabilities
     seqs, log_probs = state.inputs[:2]
     flat_seqs = _merge_first_two_dims(seqs)
     flat_state = map_structure(lambda x: _merge_first_two_dims(x), state.state)
-    step_log_probs, next_state = func(flat_seqs, flat_state)
+    step_log_probs, next_state = func(flat_seqs, flat_state, time)
     step_log_probs = _split_first_two_dims(step_log_probs, batch_size,
                                            beam_size)
     next_state = map_structure(
@@ -163,6 +172,41 @@ def _beam_search_step(time, func, state, batch_size, beam_size, alpha,
         lambda x: _gather_2d(x, alive_indices),
         next_state)
     alive_log_probs = alive_scores * length_penalty
+    # update the matrices
+    alive_state = map_structure(
+        lambda x: _merge_first_two_dims(x),
+        alive_state
+    )
+    time_point = python_time()
+    for model_state in alive_state:
+        helper.update_tgt_stack_batch_cpu(
+            step=time + 1,
+            seq=np.reshape(alive_symbols.cpu().numpy(), [-1]),
+            stack=model_state["typed_matrix"]["stack_q"],
+            stack_pointer=model_state["typed_matrix"]["stack_pointer_q"],
+            nearest_q=model_state["typed_matrix"]["nearest_q"],
+            stack_history_k=model_state["typed_matrix"]["dec_self_attn"]["stack_history_k"],
+            vocab=vocab,
+        )
+        helper.update_dec_self_attn_batch_cpu(
+            step=time + 1,
+            mat=model_state["typed_matrix"]["dec_self_attn"]["mat"],
+            nearest_q=model_state["typed_matrix"]["nearest_q"],
+            stack_history_k=model_state["typed_matrix"]["dec_self_attn"]["stack_history_k"],
+        )
+        helper.update_enc_dec_attn_batch_cpu(
+            step=time + 1,
+            length_k=length_src,
+            mat=model_state["typed_matrix"]["enc_dec_attn"]["mat"],
+            nearest_q=model_state["typed_matrix"]["nearest_q"],
+            stack_history_k=model_state["typed_matrix"]["enc_dec_attn"]["stack_history_k"],
+        )
+    alive_state = map_structure(
+        lambda x: _split_first_two_dims(x, batch_size, beam_size),
+        alive_state
+    )
+    print("updated time=%d" % time)
+
     # Check length constraint
     length_flags = torch.le(max_length, time + 1).float()
     alive_log_probs = alive_log_probs + length_flags * inf
@@ -225,9 +269,8 @@ def beam_search(models, features, params):
     src_vocabulary, tgt_vocabulary = \
         data.vocab.load_tagged_vocabulary(params.vocab)
     seq_k = features["source"].cpu().numpy()
-    length_k = features["source"].shape[1]
     for state in states:
-        # initialize enc_dec_attn
+        # initialize enc_dec_attn stack_history
         stack_history_k = state["typed_matrix"]["enc_dec_attn"]["stack_history_k"]
         helper.calc_stack_history_batch_cpu(
             seq=seq_k,
@@ -258,6 +301,7 @@ def beam_search(models, features, params):
     features["enc_self_attn"] = torch.reshape(features["enc_self_attn"],
                                             [batch_size * beam_size, seq_length, seq_length])
 
+    # fixed the way to modify
     decoding_fn = _get_inference_fn(funcs, features)
 
     states = map_structure(
@@ -268,6 +312,32 @@ def beam_search(models, features, params):
     init_seqs = torch.full([batch_size, beam_size, 1], bos_id, device=device)
     init_seqs = init_seqs.long()
     # initialize typed_matrix
+    flat_states = map_structure(lambda x: _merge_first_two_dims(x), states)
+    for state in flat_states:
+        helper.update_tgt_stack_batch_cpu(
+            step=0,
+            seq=np.reshape(init_seqs.cpu().numpy(), [-1]),
+            stack=state["typed_matrix"]["stack_q"],
+            stack_pointer=state["typed_matrix"]["stack_pointer_q"],
+            nearest_q=state["typed_matrix"]["nearest_q"],
+            stack_history_k=state["typed_matrix"]["dec_self_attn"]["stack_history_k"],
+            vocab=tgt_vocabulary,
+        )
+        helper.update_dec_self_attn_batch_cpu(
+            step=0,
+            mat=state["typed_matrix"]["dec_self_attn"]["mat"],
+            nearest_q=state["typed_matrix"]["nearest_q"],
+            stack_history_k=state["typed_matrix"]["dec_self_attn"]["stack_history_k"],
+        )
+        helper.update_enc_dec_attn_batch_cpu(
+            step=0,
+            length_k=features["source"].shape[-1],
+            mat=state["typed_matrix"]["enc_dec_attn"]["mat"],
+            nearest_q=state["typed_matrix"]["nearest_q"],
+            stack_history_k=state["typed_matrix"]["enc_dec_attn"]["stack_history_k"],
+        )
+        # helper.print_state(0, features["source"].shape[-1], state)
+    states = map_structure(lambda x: _split_first_two_dims(x, batch_size, beam_size), flat_states)
 
     init_log_probs = init_seqs.new_tensor(
         [[0.] + [min_val] * (beam_size - 1)], dtype=torch.float32)
@@ -286,9 +356,13 @@ def beam_search(models, features, params):
         finish=(fin_flags, fin_seqs, fin_scores),
     )
 
+    length_src = features["source"].shape[-1]
     for time in range(max_step):
-        state = _beam_search_step(time, decoding_fn, state, batch_size,
-                                  beam_size, alpha, pad_id, eos_id, max_length)
+        state = _beam_search_step(
+            time=time, func=decoding_fn, state=state, batch_size=batch_size,
+            beam_size=beam_size, alpha=alpha, pad_id=pad_id, eos_id=eos_id,
+            max_length=max_length, inf=-1e9, vocab=tgt_vocabulary,
+            length_src=length_src)
         max_penalty = ((5.0 + max_step) / 6.0) ** alpha
         best_alive_score = torch.max(state.inputs[1][:, 0] / max_penalty)
         worst_finished_score = torch.min(state.finish[2])

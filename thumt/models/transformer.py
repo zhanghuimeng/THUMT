@@ -386,11 +386,11 @@ class Transformer(modules.Module):
                 "stack_pointer_q": np.full([batch_size], 0, np.int32),
                 "nearest_q": np.full([batch_size, max_length], -1, np.int32),
                 "dec_self_attn": {
-                    "mat": np.zeros([3, batch_size, max_length, max_length], np.int32),
+                    "mat": np.zeros([batch_size, max_length, max_length], np.int32),
                     "stack_history_k": np.full([batch_size, max_length, max_length], -1, np.int32),
                 },
                 "enc_dec_attn": {
-                    "mat": np.zeros([3, batch_size, max_length, max_length], np.int32),
+                    "mat": np.zeros([batch_size, max_length, max_length], np.int32),
                     "stack_history_k": np.full([batch_size, max_length, max_length], -1, np.int32),
                 }
             }
