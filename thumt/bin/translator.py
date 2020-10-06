@@ -32,6 +32,9 @@ def parse_args():
                         help="Path of input file")
     parser.add_argument("--output", type=str, required=True,
                         help="Path of output file")
+    parser.add_argument("--log_dir", type=str, required=True,
+                        default="test/",
+                        help="Path of output file")
     parser.add_argument("--checkpoints", type=str, required=True, nargs="+",
                         help="Path of trained models")
     parser.add_argument("--vocabulary", type=str, nargs=2, required=True,
@@ -186,7 +189,7 @@ def main(args):
 
             model.eval()
             model.load_state_dict(
-                torch.load(utils.latest_checkpoint(args.checkpoints[i]),
+                torch.load(args.checkpoints[i],
                            map_location="cpu")["model"])
 
             model_list.append(model)
@@ -214,6 +217,11 @@ def main(args):
         
         all_outputs = []
 
+        start_time = time.time()
+        if args.log_dir is not None:
+            writer = torch.utils.tensorboard.SummaryWriter(args.log_dir)
+        else:
+            writer = None
         while True:
             try:
                 features = next(iterator)
@@ -241,7 +249,7 @@ def main(args):
 
             # Decode
             if mode != "eval":
-                seqs, _ = utils.beam_search(model_list, features, params)
+                seqs, _ = utils.beam_search(model_list, features, params, counter, writer)
             else:
                 seqs, _ = utils.argmax_decoding(model_list, features, params)
 
@@ -283,6 +291,10 @@ def main(args):
 
             t = time.time() - t
             print("Finished batch: %d (%.3f sec)" % (counter, t))
+
+        if writer:
+            writer.close()
+        print("Total time: %.3f sec" % (time.time() - start_time))
 
         if dist.get_rank() == 0:
             restored_outputs = []

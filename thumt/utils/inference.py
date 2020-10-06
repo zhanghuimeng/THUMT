@@ -85,26 +85,26 @@ class BeamSearchState(namedtuple("BeamSearchState",
 
 def _get_inference_fn(model_fns, features):
     def inference_fn(inputs, state, step):
+        length_k = features["source"].shape[-1]
+        dec_self_attn = torch.from_numpy(
+            state[0]["typed_matrix"]["dec_self_attn"]["mat"][:, step, np.newaxis, :step + 1]).cuda()
+        enc_dec_attn = torch.from_numpy(
+            state[0]["typed_matrix"]["enc_dec_attn"]["mat"][:, step, np.newaxis, :length_k]).cuda()
         local_features = {
             "source": features["source"],
             "source_mask": features["source_mask"],
             "enc_self_attn": features["enc_self_attn"],
+            "dec_self_attn": dec_self_attn,
+            "enc_dec_attn": enc_dec_attn,
             "target": inputs,
             "target_mask": torch.ones(*inputs.shape).float().cuda()
         }
 
         outputs = []
         next_state = []
-        length_k = features["source"].shape[-1]
 
         for (model_fn, model_state) in zip(model_fns, state):
             if model_state:
-                dec_self_attn = torch.from_numpy(
-                    model_state["typed_matrix"]["dec_self_attn"]["mat"][:, step, np.newaxis, :step + 1]).cuda()
-                enc_dec_attn = torch.from_numpy(
-                    model_state["typed_matrix"]["enc_dec_attn"]["mat"][:, step, np.newaxis, :length_k]).cuda()
-                local_features["dec_self_attn"] = dec_self_attn
-                local_features["enc_dec_attn"] = enc_dec_attn
                 logits, new_state = model_fn(local_features, model_state)
                 outputs.append(torch.nn.functional.log_softmax(logits,
                                                                dim=-1))
@@ -125,12 +125,21 @@ def _get_inference_fn(model_fns, features):
 
 def _beam_search_step(time, func, state, batch_size, beam_size, alpha,
                       pad_id, eos_id, max_length, inf=-1e9, vocab=None,
-                      length_src=None):
+                      length_src=None, epoch=-1, writer=None):
+    time_point = python_time()
     # Compute log probabilities
     seqs, log_probs = state.inputs[:2]
     flat_seqs = _merge_first_two_dims(seqs)
     flat_state = map_structure(lambda x: _merge_first_two_dims(x), state.state)
+    if writer:
+        writer.add_scalar("beam_search/epoch_%d/initialize" % epoch,
+                          python_time() - time_point, time)
+    time_point = python_time()
     step_log_probs, next_state = func(flat_seqs, flat_state, time)
+    if writer:
+        writer.add_scalar("beam_search/epoch_%d/inference_fn" % epoch,
+                          python_time() - time_point, time)
+    time_point = python_time()
     step_log_probs = _split_first_two_dims(step_log_probs, batch_size,
                                            beam_size)
     next_state = map_structure(
@@ -177,6 +186,9 @@ def _beam_search_step(time, func, state, batch_size, beam_size, alpha,
         lambda x: _merge_first_two_dims(x),
         alive_state
     )
+    if writer:
+        writer.add_scalar("beam_search/epoch_%d/beam_search_1" % epoch,
+                          python_time() - time_point, time)
     time_point = python_time()
     for model_state in alive_state:
         helper.update_tgt_stack_batch_cpu(
@@ -205,7 +217,10 @@ def _beam_search_step(time, func, state, batch_size, beam_size, alpha,
         lambda x: _split_first_two_dims(x, batch_size, beam_size),
         alive_state
     )
-    print("updated time=%d" % time)
+    if writer:
+        writer.add_scalar("beam_search/epoch_%d/attn_mat" % epoch,
+                          python_time() - time_point, time)
+    time_point = python_time()
 
     # Check length constraint
     length_flags = torch.le(max_length, time + 1).float()
@@ -232,11 +247,14 @@ def _beam_search_step(time, func, state, batch_size, beam_size, alpha,
         state=alive_state,
         finish=(fin_flags, fin_seqs, fin_scores),
     )
+    if writer:
+        writer.add_scalar("beam_search/epoch_%d/beam_search_2" % epoch,
+                          python_time() - time_point, time)
 
     return new_state
 
 
-def beam_search(models, features, params):
+def beam_search(models, features, params, epoch=-1, writer=None):
     if not isinstance(models, (list, tuple)):
         raise ValueError("'models' must be a list or tuple")
 
@@ -362,7 +380,7 @@ def beam_search(models, features, params):
             time=time, func=decoding_fn, state=state, batch_size=batch_size,
             beam_size=beam_size, alpha=alpha, pad_id=pad_id, eos_id=eos_id,
             max_length=max_length, inf=-1e9, vocab=tgt_vocabulary,
-            length_src=length_src)
+            length_src=length_src, epoch=epoch, writer=writer)
         max_penalty = ((5.0 + max_step) / 6.0) ** alpha
         best_alive_score = torch.max(state.inputs[1][:, 0] / max_penalty)
         worst_finished_score = torch.min(state.finish[2])
@@ -378,6 +396,8 @@ def beam_search(models, features, params):
         #     enc_dec_attn=_merge_first_two_dims(state.state[0]["typed_matrix"]["enc_dec_attn"]["mat"])[:, :time + 2, :length_src],
         # )
         # print("check ok")
+        if writer:
+            writer.flush()
 
         if is_finished:
             break

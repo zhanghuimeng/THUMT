@@ -311,13 +311,8 @@ class Transformer(modules.Module):
     def decode(self, features, state, mode="infer"):
         src_seq = features["source"]
         tgt_seq = features["target"]
-        if mode != "infer":
-            dec_self_attn = features["dec_self_attn"]
-            enc_dec_attn = features["enc_dec_attn"]
-        else:
-            # TODO
-            dec_self_attn = None
-            enc_dec_attn = None
+        dec_self_attn = features["dec_self_attn"]
+        enc_dec_attn = features["enc_dec_attn"]
 
         enc_attn_bias = state["enc_attn_bias"]
         dec_attn_bias = self.causal_bias(tgt_seq.shape[1])

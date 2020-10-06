@@ -188,10 +188,6 @@ class MultiHeadAttention(MultiHeadAttentionBase):
         #         elif type == "dec-self-attn":
         #             typed_matrix = typed_matrix[:, :, -1:, :]
 
-        if list(typed_matrix.shape)[-2] != list(q.shape)[-2]:
-            utils.helper.print_sentence(seq_q, vocab_q["idx2word"])
-            exit(-1)
-
         # split heads
         # qh: [batch, heads, length_q, h2] or [batch, heads, 1, h2]
         # kh, vh: [batch, heads, length_k, h2]
