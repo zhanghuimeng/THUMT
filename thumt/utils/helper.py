@@ -223,20 +223,20 @@ def update_dec_self_attn_batch_cpu(step, mat,
         for j in range(step + 1):
             # the down part
             if nearest_q[i][step] == -1:
-                mat[i][step][j] = 1
+                mat[i][step][j] = 0
             elif check_in_stack_history(stack_history_k,
                                         nearest_q[i][step], i, j):
-                mat[i][step][j] = 2
+                mat[i][step][j] = 1
             else:
-                mat[i][step][j] = 3
+                mat[i][step][j] = 2
             # the right part
             if nearest_q[i][j] == -1:
-                mat[i][j][step] = 1
+                mat[i][j][step] = 0
             elif check_in_stack_history(stack_history_k,
                                         nearest_q[i][j], i, step):
-                mat[i][j][step] = 2
+                mat[i][j][step] = 1
             else:
-                mat[i][j][step] = 3
+                mat[i][j][step] = 2
 
 
 # mat: [batch, max_length, max_length]
@@ -249,12 +249,12 @@ def update_enc_dec_attn_batch_cpu(step, length_k, mat,
     for i in range(batch_size):
         for j in range(length_k):
             if nearest_q[i][step] == -1:
-                mat[i][step][j] = 1
+                mat[i][step][j] = 0
             elif check_in_stack_history(stack_history_k,
                                         nearest_q[i][step], i, j):
-                mat[i][step][j] = 2
+                mat[i][step][j] = 1
             else:
-                mat[i][step][j] = 3
+                mat[i][step][j] = 2
 
 
 # helper print function
@@ -279,7 +279,7 @@ def check_beam_search(src_seq, src_vocab, tgt_seq, tgt_vocab,
         tgt_seq, src_seq, tgt_vocab, src_vocab).cpu().numpy()
 
     def merge_attn_mat(tensor):
-        return np.squeeze(tensor[0]) * 1 + np.squeeze(tensor[1]) * 2 + np.squeeze(tensor[2]) * 3
+        return np.squeeze(tensor[0]) * 0 + np.squeeze(tensor[1]) * 1 + np.squeeze(tensor[2]) * 2
 
     dec_self_attn_0 = merge_attn_mat(dec_self_attn_0)
     enc_dec_attn_0 = merge_attn_mat(enc_dec_attn_0)

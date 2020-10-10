@@ -13,12 +13,19 @@ import re
 import six
 import socket
 import time
+import pickle
 import torch
+import numpy as np
+import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap
 
 import thumt.data as data
 import torch.distributed as dist
 import thumt.models as models
 import thumt.utils as utils
+
+plt.rcParams["font.sans-serif"] = ["SimHei"] # 用来正常显示中文标签
+plt.rcParams["axes.unicode_minus"] = False # 用来正常显示负号
 
 
 def parse_args():
@@ -196,7 +203,7 @@ def main(args):
 
         if len(args.input) == 2:
             mode = "infer"
-            sorted_key, dataset = data.get_dataset(
+            sorted_key, sorted_data, dataset = data.get_dataset(
                 args.input, mode, params)
         else:
             # Teacher-forcing
@@ -216,6 +223,8 @@ def main(args):
                   for _ in range(dist.get_world_size())]
         
         all_outputs = []
+        all_dec_self_attn = []
+        all_enc_dec_attn = []
 
         start_time = time.time()
         if args.log_dir is not None:
@@ -249,7 +258,7 @@ def main(args):
 
             # Decode
             if mode != "eval":
-                seqs, _ = utils.beam_search(model_list, features, params, counter, writer)
+                seqs, _, dec_self_attn, enc_dec_attn = utils.beam_search(model_list, features, params, counter, writer)
             else:
                 seqs, _ = utils.argmax_decoding(model_list, features, params)
 
@@ -289,6 +298,9 @@ def main(args):
                     
                     all_outputs.append(beam_seqs)
 
+            all_dec_self_attn += [np.squeeze(mat) for mat in np.split(dec_self_attn, dec_self_attn.shape[0])]
+            all_enc_dec_attn += [np.squeeze(mat) for mat in np.split(enc_dec_attn, enc_dec_attn.shape[0])]
+
             t = time.time() - t
             print("Finished batch: %d (%.3f sec)" % (counter, t))
 
@@ -297,10 +309,16 @@ def main(args):
         print("Total time: %.3f sec" % (time.time() - start_time))
 
         if dist.get_rank() == 0:
+            restored_inputs = []
             restored_outputs = []
+            restored_dec_self_attn = []
+            restored_enc_dec_attn = []
             if sorted_key is not None:
                 for idx in range(len(all_outputs)):
+                    restored_inputs.append(sorted_data[sorted_key[idx]])
                     restored_outputs.append(all_outputs[sorted_key[idx]])
+                    restored_dec_self_attn.append(all_dec_self_attn[sorted_key[idx]])
+                    restored_enc_dec_attn.append(all_enc_dec_attn[sorted_key[idx]])
             else:
                 restored_outputs = all_outputs
             
@@ -313,6 +331,50 @@ def main(args):
                         for k, seq in enumerate(seqs):
                             fd.write(b"%d\t%d\t" % (idx, k))
                             fd.write(seq + b"\n")
+
+            output_list = []
+            for i in range(len(restored_outputs)):
+                src = restored_inputs[i].decode().split(" ") + ["<eos>"]
+                tgt = ["<bos>"] + restored_outputs[i][0].decode().split(" ")
+                src_len = len(src)
+                tgt_len = len(tgt)
+                dec_self_attn = restored_dec_self_attn[i][:tgt_len, :tgt_len]
+                enc_dec_attn = restored_enc_dec_attn[i][:tgt_len, :src_len]
+                output_list.append({
+                    "src": src,
+                    "tgt": tgt,
+                    "dec_self_attn": dec_self_attn,
+                    "enc_dec_attn": enc_dec_attn,
+                })
+                # save_attn_fig(os.path.join(args.log_dir, "%04d_dec_self_attn.png" % i), tgt, tgt, dec_self_attn)
+                # save_attn_fig(os.path.join(args.log_dir, "%04d_enc_dec_attn.png" % i), tgt, src, enc_dec_attn)
+
+            with open(os.path.join(args.log_dir, "attn.pickle"), "wb") as f:
+                pickle.dump(output_list, f)
+
+
+# 0: green, 1: red, 2: blue
+colors = ["green", "red", "blue"]
+cmap = ListedColormap(colors)
+
+def save_attn_fig(filename, seq_q, seq_k, mat):
+    nq = len(seq_q)
+    nk = len(seq_k)
+    extent = (0, nk, nq, 0)
+    _, ax = plt.subplots(figsize=((nk + 3) // 4, (nq + 3) // 4))
+    ax.imshow(mat, vmin=0, vmax=len(cmap.colors), cmap=cmap, extent=extent)
+    ax.set_frame_on(False)
+    locs = np.arange(nk)
+    ax.xaxis.set_ticks(locs, minor=True)
+    ax.xaxis.set(ticks=locs + 0.5, ticklabels=seq_k)
+    locs = np.arange(nq)
+    ax.yaxis.set_ticks(locs, minor=True)
+    ax.yaxis.set(ticks=locs + 0.5, ticklabels=seq_q)
+    for tick in ax.get_xticklabels():
+        tick.set_rotation(90)
+    ax.grid(color='w', linewidth=1, which="minor")
+    plt.savefig(filename)
+    plt.close()
 
 
 # Wrap main function

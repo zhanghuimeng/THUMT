@@ -259,7 +259,7 @@ def build_input_fn(filenames, mode, params):
             },
             num_parallel_calls=tf.data.experimental.AUTOTUNE)
 
-        return sorted_key, dataset
+        return sorted_key, sorted_data, dataset
 
     if mode == "train":
         return train_input_fn

@@ -387,15 +387,6 @@ def beam_search(models, features, params, epoch=-1, writer=None):
         cond = torch.gt(worst_finished_score, best_alive_score)
         is_finished = bool(cond)
 
-        # helper.check_beam_search(
-        #     src_seq=features["source"].cpu().numpy(),
-        #     src_vocab=src_vocabulary,
-        #     tgt_seq=_merge_first_two_dims(state.inputs[0]).cpu().numpy(),
-        #     tgt_vocab=tgt_vocabulary,
-        #     dec_self_attn=_merge_first_two_dims(state.state[0]["typed_matrix"]["dec_self_attn"]["mat"])[:, :time + 2, :time + 2],
-        #     enc_dec_attn=_merge_first_two_dims(state.state[0]["typed_matrix"]["enc_dec_attn"]["mat"])[:, :time + 2, :length_src],
-        # )
-        # print("check ok")
         if writer:
             writer.flush()
 
@@ -416,7 +407,10 @@ def beam_search(models, features, params, epoch=-1, writer=None):
     final_seqs = torch.nn.functional.pad(final_seqs, (0, 1, 0, 0, 0, 0),
                                          value=eos_id)
 
-    return final_seqs[:, :top_beams, 1:], final_scores[:, :top_beams]
+    dec_self_attn = final_state.state[0]["typed_matrix"]["dec_self_attn"]["mat"][:, 0, :, :]
+    enc_dec_attn = final_state.state[0]["typed_matrix"]["enc_dec_attn"]["mat"][:, 0, :, :]
+
+    return final_seqs[:, :top_beams, 1:], final_scores[:, :top_beams], dec_self_attn, enc_dec_attn
 
 
 def argmax_decoding(models, features, params):
