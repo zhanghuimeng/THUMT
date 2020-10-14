@@ -8,13 +8,13 @@ def print_sentence(sentence, idx2word):
         sentence = sentence.cpu().numpy()
     if sentence.ndim == 1:
         tokens = [idx2word[id] for id in sentence]
-        print(" ".join(tokens))
+        print(b" ".join(tokens).decode("utf-8"))
     elif sentence.ndim == 2:
         if len(sentence) > 5:
             sentence = sentence[:5, :]
         for i in range(len(sentence)):
             tokens = [idx2word[id] for id in sentence[i]]
-            print(" ".join(tokens))
+            print(b" ".join(tokens).decode("utf-8"))
     else:
         raise ValueError("Can't handle more than 2 dimensions")
 
@@ -258,16 +258,23 @@ def update_enc_dec_attn_batch_cpu(step, length_k, mat,
 
 
 # helper print function
-def print_state(step, length_src, state):
-    print("stack_q: ")
-    print(state["typed_matrix"]["stack_q"][:, :max(state["typed_matrix"]["stack_pointer_q"])])
-    print("nearest_q: ")
-    print(state["typed_matrix"]["nearest_q"][:, :step + 1])
-
-    print("dec_self_attn mat: ")
-    print(state["typed_matrix"]["dec_self_attn"]["mat"][:, :step + 1, :step + 1])
-    print("enc_dec_attn mat: ")
-    print(state["typed_matrix"]["enc_dec_attn"]["mat"][:, :step + 1, :length_src])
+def print_state(step, src_seq, tgt_seq, src_vocab, tgt_vocab, state):
+    print("batch_size=%d" % src_seq.shape[0])
+    for i in range(src_seq.shape[0]):
+        print("sentence %d" % i)
+        print("src: ")
+        print_sentence(src_seq[i], src_vocab["idx2word"])
+        print("tgt: ")
+        print_sentence(tgt_seq[i], tgt_vocab["idx2word"])
+        print("stack_q: ")
+        print(state["typed_matrix"]["stack_q"][i, :max(state["typed_matrix"]["stack_pointer_q"])])
+        print("nearest_q: ")
+        print(state["typed_matrix"]["nearest_q"][i, :step + 1])
+        print("dec_self_attn mat: ")
+        print(state["typed_matrix"]["dec_self_attn"]["mat"][i, :step + 1, :step + 1])
+        print("enc_dec_attn mat: ")
+        print(state["typed_matrix"]["enc_dec_attn"]["mat"][i, :step + 1, :src_seq.shape[1]])
+        print()
     print()
 
 

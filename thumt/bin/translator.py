@@ -18,14 +18,17 @@ import torch
 import numpy as np
 import matplotlib.pyplot as plt
 from matplotlib.colors import ListedColormap
+import cProfile
+import pstats
+import io
 
 import thumt.data as data
 import torch.distributed as dist
 import thumt.models as models
 import thumt.utils as utils
 
-plt.rcParams["font.sans-serif"] = ["SimHei"] # 用来正常显示中文标签
-plt.rcParams["axes.unicode_minus"] = False # 用来正常显示负号
+plt.rcParams['font.sans-serif'] = ['Droid Sans Fallback'] # 用来正常显示中文标签
+plt.rcParams['axes.unicode_minus'] = False # 用来正常显示负号
 
 
 def parse_args():
@@ -54,6 +57,8 @@ def parse_args():
                         help="Additional hyper parameters")
     parser.add_argument("--half", action="store_true",
                         help="Use half precision for decoding")
+    parser.add_argument("--save_attn_fig", action="store_true",
+                        help="Save typed-attn figure for each sentence")
 
     return parser.parse_args()
 
@@ -117,18 +122,18 @@ def import_params(model_dir, model_name, params):
 def override_params(params, args):
     params.parse(args.parameters.lower())
 
-    src_vocab, src_w2idx, src_idx2w = data.load_vocabulary(args.vocabulary[0])
-    tgt_vocab, tgt_w2idx, tgt_idx2w = data.load_vocabulary(args.vocabulary[1])
+    src_vocabulary, tgt_vocabulary = data.load_tagged_vocabulary(args.vocabulary)
     params.vocab = args.vocabulary
+    params.full_vocab = src_vocabulary, tgt_vocabulary
 
     params.vocabulary = {
-        "source": src_vocab, "target": tgt_vocab
+        "source": src_vocabulary["vocab"], "target": tgt_vocabulary["vocab"]
     }
     params.lookup = {
-        "source": src_w2idx, "target": tgt_w2idx
+        "source": src_vocabulary["word2idx"], "target": tgt_vocabulary["word2idx"]
     }
     params.mapping = {
-        "source": src_idx2w, "target": tgt_idx2w
+        "source": src_vocabulary["idx2word"], "target": tgt_vocabulary["idx2word"]
     }
 
     return params
@@ -160,6 +165,10 @@ def infer_gpu_num(param_str):
 
 
 def main(args):
+    # cProfile
+    pr = cProfile.Profile()
+    pr.enable()
+
     # Load configs
     model_cls_list = [models.get_model(model) for model in args.models]
     params_list = [default_params() for _ in range(len(model_cls_list))]
@@ -332,25 +341,50 @@ def main(args):
                             fd.write(b"%d\t%d\t" % (idx, k))
                             fd.write(seq + b"\n")
 
-            output_list = []
+            src_list = []
+            tgt_list = []
+            dec_self_attn_list = []
+            enc_dec_attn_list = []
             for i in range(len(restored_outputs)):
                 src = restored_inputs[i].decode().split(" ") + ["<eos>"]
-                tgt = ["<bos>"] + restored_outputs[i][0].decode().split(" ")
+                tgt = ["<eos>"] + restored_outputs[i][0].decode().split(" ")
                 src_len = len(src)
                 tgt_len = len(tgt)
                 dec_self_attn = restored_dec_self_attn[i][:tgt_len, :tgt_len]
                 enc_dec_attn = restored_enc_dec_attn[i][:tgt_len, :src_len]
-                output_list.append({
-                    "src": src,
-                    "tgt": tgt,
-                    "dec_self_attn": dec_self_attn,
-                    "enc_dec_attn": enc_dec_attn,
-                })
-                # save_attn_fig(os.path.join(args.log_dir, "%04d_dec_self_attn.png" % i), tgt, tgt, dec_self_attn)
-                # save_attn_fig(os.path.join(args.log_dir, "%04d_enc_dec_attn.png" % i), tgt, src, enc_dec_attn)
+                src_list.append(src)
+                tgt_list.append(tgt)
+                dec_self_attn_list.append(dec_self_attn)
+                enc_dec_attn_list.append(enc_dec_attn)
+                print("src: %s" % " ".join(src))
+                print("tgt: %s" % " ".join(tgt))
+                print("dec_self_attn: ")
+                print(restored_dec_self_attn[i][:20, :20])
+                print(dec_self_attn)
+                print("enc_dec_attn: ")
+                print(restored_enc_dec_attn[i][:20, :20])
+                print(enc_dec_attn)
+                print(args.save_attn_fig)
+
+                if args.save_attn_fig:
+                    save_attn_fig(os.path.join(args.log_dir, "%04d_dec_self_attn.png" % i), tgt, tgt, dec_self_attn)
+                    save_attn_fig(os.path.join(args.log_dir, "%04d_enc_dec_attn.png" % i), tgt, src, enc_dec_attn)
 
             with open(os.path.join(args.log_dir, "attn.pickle"), "wb") as f:
-                pickle.dump(output_list, f)
+                pickle.dump({
+                    "src": src_list,
+                    "tgt": tgt_list,
+                    "dec_self_attn": dec_self_attn_list,
+                    "enc_dec_attn": enc_dec_attn_list,
+                }, f)
+
+    # end of cProfile
+    pr.disable()
+    s = io.StringIO()
+    ps = pstats.Stats(pr, stream=s).sort_stats('tottime')
+    ps.print_stats()
+    with open(os.path.join(args.log_dir, "profile.txt"), "w") as f:
+        f.write(s.getvalue())
 
 
 # 0: green, 1: red, 2: blue
@@ -361,7 +395,7 @@ def save_attn_fig(filename, seq_q, seq_k, mat):
     nq = len(seq_q)
     nk = len(seq_k)
     extent = (0, nk, nq, 0)
-    _, ax = plt.subplots(figsize=((nk + 3) // 4, (nq + 3) // 4))
+    _, ax = plt.subplots(figsize=((nk + 3) // 4 + 4, (nq + 3) // 4 + 4))
     ax.imshow(mat, vmin=0, vmax=len(cmap.colors), cmap=cmap, extent=extent)
     ax.set_frame_on(False)
     locs = np.arange(nk)

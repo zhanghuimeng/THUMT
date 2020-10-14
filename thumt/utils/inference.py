@@ -125,6 +125,7 @@ def _get_inference_fn(model_fns, features):
 
 def _beam_search_step(time, func, state, batch_size, beam_size, alpha,
                       pad_id, eos_id, max_length, inf=-1e9, vocab=None,
+                      source=None, src_vocab=None,
                       length_src=None, epoch=-1, writer=None):
     time_point = python_time()
     # Compute log probabilities
@@ -190,6 +191,10 @@ def _beam_search_step(time, func, state, batch_size, beam_size, alpha,
         writer.add_scalar("beam_search/epoch_%d/beam_search_1" % epoch,
                           python_time() - time_point, time)
     time_point = python_time()
+    tgt_seq = map_structure(
+        lambda x: _merge_first_two_dims(x),
+        alive_seqs,
+    ).cpu().numpy()
     for model_state in alive_state:
         helper.update_tgt_stack_batch_cpu(
             step=time + 1,
@@ -212,6 +217,15 @@ def _beam_search_step(time, func, state, batch_size, beam_size, alpha,
             mat=model_state["typed_matrix"]["enc_dec_attn"]["mat"],
             nearest_q=model_state["typed_matrix"]["nearest_q"],
             stack_history_k=model_state["typed_matrix"]["enc_dec_attn"]["stack_history_k"],
+        )
+        print("step=%d" % (time + 1))
+        helper.print_state(
+            step=time + 1,
+            src_seq=source.cpu().numpy(),
+            tgt_seq=tgt_seq,
+            src_vocab=src_vocab,
+            tgt_vocab=vocab,
+            state=model_state
         )
     alive_state = map_structure(
         lambda x: _split_first_two_dims(x, batch_size, beam_size),
@@ -284,8 +298,7 @@ def beam_search(models, features, params, epoch=-1, writer=None):
         funcs.append(model.decode)
 
     # initialize the stacks in model
-    src_vocabulary, tgt_vocabulary = \
-        data.vocab.load_tagged_vocabulary(params.vocab)
+    src_vocabulary, tgt_vocabulary = params.full_vocab
     seq_k = features["source"].cpu().numpy()
     for state in states:
         # initialize enc_dec_attn stack_history
@@ -380,6 +393,7 @@ def beam_search(models, features, params, epoch=-1, writer=None):
             time=time, func=decoding_fn, state=state, batch_size=batch_size,
             beam_size=beam_size, alpha=alpha, pad_id=pad_id, eos_id=eos_id,
             max_length=max_length, inf=-1e9, vocab=tgt_vocabulary,
+            source=features["source"], src_vocab=src_vocabulary,
             length_src=length_src, epoch=epoch, writer=writer)
         max_penalty = ((5.0 + max_step) / 6.0) ** alpha
         best_alive_score = torch.max(state.inputs[1][:, 0] / max_penalty)
@@ -407,8 +421,25 @@ def beam_search(models, features, params, epoch=-1, writer=None):
     final_seqs = torch.nn.functional.pad(final_seqs, (0, 1, 0, 0, 0, 0),
                                          value=eos_id)
 
+    # with np.printoptions(threshold=np.inf):
+    #     print(final_state.state[0]["typed_matrix"]["dec_self_attn"]["mat"].shape)
+    #     print(final_state.state[0]["typed_matrix"]["dec_self_attn"]["mat"][:, :, :20, :20])
+    #     print(final_state.state[0]["typed_matrix"]["enc_dec_attn"]["mat"].shape)
+    #     print(final_state.state[0]["typed_matrix"]["enc_dec_attn"]["mat"][:, :, :20, :20])
+    # [batch, beam, leng, leng]
     dec_self_attn = final_state.state[0]["typed_matrix"]["dec_self_attn"]["mat"][:, 0, :, :]
     enc_dec_attn = final_state.state[0]["typed_matrix"]["enc_dec_attn"]["mat"][:, 0, :, :]
+
+    with np.printoptions(threshold=np.inf):
+        for i in range(beam_size):
+            print("src:")
+            helper.print_sentence(features["source"][i // 4], src_vocabulary["idx2word"])
+            print("tgt:")
+            helper.print_sentence(final_seqs[0, i, :], tgt_vocabulary["idx2word"])
+            print("dec_self_attn: ")
+            print(final_state.state[0]["typed_matrix"]["dec_self_attn"]["mat"][0, i, :20, :20])
+            print("enc_dec_attn: ")
+            print(final_state.state[0]["typed_matrix"]["enc_dec_attn"]["mat"][0, i, :20, :20])
 
     return final_seqs[:, :top_beams, 1:], final_scores[:, :top_beams], dec_self_attn, enc_dec_attn
 
