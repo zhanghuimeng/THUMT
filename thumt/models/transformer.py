@@ -377,16 +377,16 @@ class Transformer(modules.Module):
                 } for i in range(self.num_decoder_layers)
             },
             "typed_matrix": {
-                "stack_q": np.full([batch_size, max_length], -1, np.int32),
-                "stack_pointer_q": np.full([batch_size], 0, np.int32),
-                "nearest_q": np.full([batch_size, max_length], -1, np.int32),
+                "stack_q": torch.full([batch_size, max_length], -1, dtype=torch.int, device=device),
+                "stack_pointer_q": torch.zeros([batch_size], dtype=torch.long, device=device),
+                "nearest_q": torch.full([batch_size, max_length], -1, dtype=torch.int, device=device),
                 "dec_self_attn": {
-                    "mat": np.zeros([batch_size, max_length, max_length], np.int32),
-                    "stack_history_k": np.full([batch_size, max_length, max_length], -1, np.int32),
+                    "mat": torch.zeros([batch_size, max_length, max_length], dtype=torch.int, device=device),
+                    "stack_history_k": torch.zeros([batch_size, max_length, max_length], dtype=torch.int, device=device),
                 },
                 "enc_dec_attn": {
-                    "mat": np.zeros([batch_size, max_length, max_length], np.int32),
-                    "stack_history_k": np.full([batch_size, max_length, max_length], -1, np.int32),
+                    "mat": torch.zeros([batch_size, max_length, max_length], dtype=torch.int, device=device),
+                    "stack_history_k": torch.full([batch_size, max_length, max_length], -1, dtype=torch.int, device=device),
                 }
             }
         }

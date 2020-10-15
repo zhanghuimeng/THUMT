@@ -257,6 +257,130 @@ def update_enc_dec_attn_batch_cpu(step, length_k, mat,
                 mat[i][step][j] = 2
 
 
+# seq: [batch]
+# stack: [batch, max_length]
+# pointer: [batch]
+# vocab: dict
+def stack_push_batch_gpu(seq, stack, pointer, vocab):
+    batch_size = seq.shape[0]
+    for i in range(batch_size):
+        if vocab["tag_type"][seq[i]] == -1:
+            stack[i][pointer[i]] = vocab["tag_content"][seq[i]]
+            pointer[i] += 1
+
+
+# seq: [batch]
+# stack: [batch, max_length]
+# pointer: [batch]
+# vocab: dict
+def stack_pop_batch_gpu(seq, stack, pointer, vocab):
+    batch_size = seq.shape[0]
+    for i in range(batch_size):
+        if vocab["tag_type"][seq[i]] == 1 and pointer[i] > 0:
+            stack[i][pointer[i] - 1] = -1 # for stack_history
+            pointer[i] -= 1
+
+
+# calculate batches of stack history (used for src)
+# seq: [batch, length]
+# stack_history: [batch, max_length, max_length]
+# vocab: dict
+def calc_stack_history_batch_gpu(seq, stack_history, vocab):
+    batch_size, length = seq.shape
+    max_length = stack_history.shape[1]
+    stack = torch.full([batch_size, max_length], -1, dtype=torch.int)
+    stack_pointer = torch.full([batch_size], 0, dtype=torch.int)
+    for i in range(length):
+        stack_push_batch_gpu(
+            seq=seq[:, i],
+            stack=stack,
+            pointer=stack_pointer,
+            vocab=vocab,
+        )
+        stack_history[:, i, :] = stack
+        stack_pop_batch_gpu(
+            seq=seq[:, i],
+            stack=stack,
+            pointer=stack_pointer,
+            vocab=vocab,
+        )
+
+
+def calc_nearest_batch_gpu(stack, pointer):
+    tmp_pointer = torch.clamp(pointer - 1, min=0)
+    return torch.squeeze(stack.gather(1, tmp_pointer.view(-1, 1)))
+
+
+# def check_in_stack_history(stack_history_k, tag, batch_idx, idx):
+#     for i in range(stack_history_k.shape[-1]):
+#         if stack_history_k[batch_idx][idx][i] == -1:
+#             break
+#         if tag == stack_history_k[batch_idx][idx][i]:
+#             return True
+#     return False
+
+
+# seq: [batch]
+# stack: [batch, max_length]
+# pointer: [batch]
+# nearest_q: [batch, max_length]
+# vocab: dict
+def update_tgt_stack_batch_gpu(step, seq, stack,
+                               stack_pointer, nearest_q,
+                               stack_history_k=None, vocab=None):
+    # update stack and history
+    stack_push_batch_gpu(seq, stack, stack_pointer, vocab)
+    nearest_q[:, step] = calc_nearest_batch_gpu(stack, stack_pointer)
+    if stack_history_k is not None:
+        stack_history_k[:, step, :] = stack
+    stack_pop_batch_gpu(seq, stack, stack_pointer, vocab)
+
+
+# mat: [batch, max_length, max_length]
+# nearest_q: [batch, max_length]
+# stack_history: [batch, max_length, max_length]
+def update_dec_self_attn_batch_gpu(step, mat,
+                                   nearest_q, stack_history_k):
+    batch_size = mat.shape[0]
+    # update mat
+    for i in range(batch_size):
+        for j in range(step + 1):
+            # the down part
+            if nearest_q[i][step] == -1:
+                mat[i][step][j] = 0
+            elif check_in_stack_history(stack_history_k,
+                                        nearest_q[i][step], i, j):
+                mat[i][step][j] = 1
+            else:
+                mat[i][step][j] = 2
+            # the right part
+            if nearest_q[i][j] == -1:
+                mat[i][j][step] = 0
+            elif check_in_stack_history(stack_history_k,
+                                        nearest_q[i][j], i, step):
+                mat[i][j][step] = 1
+            else:
+                mat[i][j][step] = 2
+
+
+# mat: [batch, max_length, max_length]
+# nearest_q: [batch, max_length]
+# stack_history: [batch, max_length, max_length]
+def update_enc_dec_attn_batch_gpu(step, length_k, mat,
+                                  nearest_q, stack_history_k):
+    batch_size = mat.shape[0]
+    # update mat
+    for i in range(batch_size):
+        for j in range(length_k):
+            if nearest_q[i][step] == -1:
+                mat[i][step][j] = 0
+            elif check_in_stack_history(stack_history_k,
+                                        nearest_q[i][step], i, j):
+                mat[i][step][j] = 1
+            else:
+                mat[i][step][j] = 2
+
+
 # helper print function
 def print_state(step, src_seq, tgt_seq, src_vocab, tgt_vocab, state):
     print("batch_size=%d" % src_seq.shape[0])

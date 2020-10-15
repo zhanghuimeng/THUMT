@@ -86,10 +86,8 @@ class BeamSearchState(namedtuple("BeamSearchState",
 def _get_inference_fn(model_fns, features):
     def inference_fn(inputs, state, step):
         length_k = features["source"].shape[-1]
-        dec_self_attn = torch.from_numpy(
-            state[0]["typed_matrix"]["dec_self_attn"]["mat"][:, step, np.newaxis, :step + 1]).cuda()
-        enc_dec_attn = torch.from_numpy(
-            state[0]["typed_matrix"]["enc_dec_attn"]["mat"][:, step, np.newaxis, :length_k]).cuda()
+        dec_self_attn = state[0]["typed_matrix"]["dec_self_attn"]["mat"][:, step, np.newaxis, :step + 1]
+        enc_dec_attn = state[0]["typed_matrix"]["enc_dec_attn"]["mat"][:, step, np.newaxis, :length_k]
         local_features = {
             "source": features["source"],
             "source_mask": features["source_mask"],
@@ -196,7 +194,7 @@ def _beam_search_step(time, func, state, batch_size, beam_size, alpha,
         alive_seqs,
     ).cpu().numpy()
     for model_state in alive_state:
-        helper.update_tgt_stack_batch_cpu(
+        helper.update_tgt_stack_batch_gpu(
             step=time + 1,
             seq=np.reshape(alive_symbols.cpu().numpy(), [-1]),
             stack=model_state["typed_matrix"]["stack_q"],
@@ -205,13 +203,13 @@ def _beam_search_step(time, func, state, batch_size, beam_size, alpha,
             stack_history_k=model_state["typed_matrix"]["dec_self_attn"]["stack_history_k"],
             vocab=vocab,
         )
-        helper.update_dec_self_attn_batch_cpu(
+        helper.update_dec_self_attn_batch_gpu(
             step=time + 1,
             mat=model_state["typed_matrix"]["dec_self_attn"]["mat"],
             nearest_q=model_state["typed_matrix"]["nearest_q"],
             stack_history_k=model_state["typed_matrix"]["dec_self_attn"]["stack_history_k"],
         )
-        helper.update_enc_dec_attn_batch_cpu(
+        helper.update_enc_dec_attn_batch_gpu(
             step=time + 1,
             length_k=length_src,
             mat=model_state["typed_matrix"]["enc_dec_attn"]["mat"],
@@ -294,7 +292,7 @@ def beam_search(models, features, params, epoch=-1, writer=None):
     for state in states:
         # initialize enc_dec_attn stack_history
         stack_history_k = state["typed_matrix"]["enc_dec_attn"]["stack_history_k"]
-        helper.calc_stack_history_batch_cpu(
+        helper.calc_stack_history_batch_gpu(
             seq=seq_k,
             stack_history=stack_history_k,
             vocab=src_vocabulary
@@ -336,7 +334,7 @@ def beam_search(models, features, params, epoch=-1, writer=None):
     # initialize typed_matrix
     flat_states = map_structure(lambda x: _merge_first_two_dims(x), states)
     for state in flat_states:
-        helper.update_tgt_stack_batch_cpu(
+        helper.update_tgt_stack_batch_gpu(
             step=0,
             seq=np.reshape(init_seqs.cpu().numpy(), [-1]),
             stack=state["typed_matrix"]["stack_q"],
@@ -345,13 +343,13 @@ def beam_search(models, features, params, epoch=-1, writer=None):
             stack_history_k=state["typed_matrix"]["dec_self_attn"]["stack_history_k"],
             vocab=tgt_vocabulary,
         )
-        helper.update_dec_self_attn_batch_cpu(
+        helper.update_dec_self_attn_batch_gpu(
             step=0,
             mat=state["typed_matrix"]["dec_self_attn"]["mat"],
             nearest_q=state["typed_matrix"]["nearest_q"],
             stack_history_k=state["typed_matrix"]["dec_self_attn"]["stack_history_k"],
         )
-        helper.update_enc_dec_attn_batch_cpu(
+        helper.update_enc_dec_attn_batch_gpu(
             step=0,
             length_k=features["source"].shape[-1],
             mat=state["typed_matrix"]["enc_dec_attn"]["mat"],
