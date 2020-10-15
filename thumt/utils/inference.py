@@ -218,15 +218,6 @@ def _beam_search_step(time, func, state, batch_size, beam_size, alpha,
             nearest_q=model_state["typed_matrix"]["nearest_q"],
             stack_history_k=model_state["typed_matrix"]["enc_dec_attn"]["stack_history_k"],
         )
-        print("step=%d" % (time + 1))
-        helper.print_state(
-            step=time + 1,
-            src_seq=source.cpu().numpy(),
-            tgt_seq=tgt_seq,
-            src_vocab=src_vocab,
-            tgt_vocab=vocab,
-            state=model_state
-        )
     alive_state = map_structure(
         lambda x: _split_first_two_dims(x, batch_size, beam_size),
         alive_state
@@ -367,7 +358,6 @@ def beam_search(models, features, params, epoch=-1, writer=None):
             nearest_q=state["typed_matrix"]["nearest_q"],
             stack_history_k=state["typed_matrix"]["enc_dec_attn"]["stack_history_k"],
         )
-        # helper.print_state(0, features["source"].shape[-1], state)
     states = map_structure(lambda x: _split_first_two_dims(x, batch_size, beam_size), flat_states)
 
     init_log_probs = init_seqs.new_tensor(
@@ -421,27 +411,7 @@ def beam_search(models, features, params, epoch=-1, writer=None):
     final_seqs = torch.nn.functional.pad(final_seqs, (0, 1, 0, 0, 0, 0),
                                          value=eos_id)
 
-    # with np.printoptions(threshold=np.inf):
-    #     print(final_state.state[0]["typed_matrix"]["dec_self_attn"]["mat"].shape)
-    #     print(final_state.state[0]["typed_matrix"]["dec_self_attn"]["mat"][:, :, :20, :20])
-    #     print(final_state.state[0]["typed_matrix"]["enc_dec_attn"]["mat"].shape)
-    #     print(final_state.state[0]["typed_matrix"]["enc_dec_attn"]["mat"][:, :, :20, :20])
-    # [batch, beam, leng, leng]
-    dec_self_attn = final_state.state[0]["typed_matrix"]["dec_self_attn"]["mat"][:, 0, :, :]
-    enc_dec_attn = final_state.state[0]["typed_matrix"]["enc_dec_attn"]["mat"][:, 0, :, :]
-
-    with np.printoptions(threshold=np.inf):
-        for i in range(beam_size):
-            print("src:")
-            helper.print_sentence(features["source"][i // 4], src_vocabulary["idx2word"])
-            print("tgt:")
-            helper.print_sentence(final_seqs[0, i, :], tgt_vocabulary["idx2word"])
-            print("dec_self_attn: ")
-            print(final_state.state[0]["typed_matrix"]["dec_self_attn"]["mat"][0, i, :20, :20])
-            print("enc_dec_attn: ")
-            print(final_state.state[0]["typed_matrix"]["enc_dec_attn"]["mat"][0, i, :20, :20])
-
-    return final_seqs[:, :top_beams, 1:], final_scores[:, :top_beams], dec_self_attn, enc_dec_attn
+    return final_seqs[:, :top_beams, 1:], final_scores[:, :top_beams]
 
 
 def argmax_decoding(models, features, params):

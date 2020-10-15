@@ -267,7 +267,7 @@ def main(args):
 
             # Decode
             if mode != "eval":
-                seqs, _, dec_self_attn, enc_dec_attn = utils.beam_search(model_list, features, params, counter, writer)
+                seqs, _ = utils.beam_search(model_list, features, params, counter, writer)
             else:
                 seqs, _ = utils.argmax_decoding(model_list, features, params)
 
@@ -307,9 +307,6 @@ def main(args):
                     
                     all_outputs.append(beam_seqs)
 
-            all_dec_self_attn += [np.squeeze(mat) for mat in np.split(dec_self_attn, dec_self_attn.shape[0])]
-            all_enc_dec_attn += [np.squeeze(mat) for mat in np.split(enc_dec_attn, enc_dec_attn.shape[0])]
-
             t = time.time() - t
             print("Finished batch: %d (%.3f sec)" % (counter, t))
 
@@ -320,14 +317,10 @@ def main(args):
         if dist.get_rank() == 0:
             restored_inputs = []
             restored_outputs = []
-            restored_dec_self_attn = []
-            restored_enc_dec_attn = []
             if sorted_key is not None:
                 for idx in range(len(all_outputs)):
                     restored_inputs.append(sorted_data[sorted_key[idx]])
                     restored_outputs.append(all_outputs[sorted_key[idx]])
-                    restored_dec_self_attn.append(all_dec_self_attn[sorted_key[idx]])
-                    restored_enc_dec_attn.append(all_enc_dec_attn[sorted_key[idx]])
             else:
                 restored_outputs = all_outputs
             
@@ -340,43 +333,6 @@ def main(args):
                         for k, seq in enumerate(seqs):
                             fd.write(b"%d\t%d\t" % (idx, k))
                             fd.write(seq + b"\n")
-
-            src_list = []
-            tgt_list = []
-            dec_self_attn_list = []
-            enc_dec_attn_list = []
-            for i in range(len(restored_outputs)):
-                src = restored_inputs[i].decode().split(" ") + ["<eos>"]
-                tgt = ["<eos>"] + restored_outputs[i][0].decode().split(" ")
-                src_len = len(src)
-                tgt_len = len(tgt)
-                dec_self_attn = restored_dec_self_attn[i][:tgt_len, :tgt_len]
-                enc_dec_attn = restored_enc_dec_attn[i][:tgt_len, :src_len]
-                src_list.append(src)
-                tgt_list.append(tgt)
-                dec_self_attn_list.append(dec_self_attn)
-                enc_dec_attn_list.append(enc_dec_attn)
-                print("src: %s" % " ".join(src))
-                print("tgt: %s" % " ".join(tgt))
-                print("dec_self_attn: ")
-                print(restored_dec_self_attn[i][:20, :20])
-                print(dec_self_attn)
-                print("enc_dec_attn: ")
-                print(restored_enc_dec_attn[i][:20, :20])
-                print(enc_dec_attn)
-                print(args.save_attn_fig)
-
-                if args.save_attn_fig:
-                    save_attn_fig(os.path.join(args.log_dir, "%04d_dec_self_attn.png" % i), tgt, tgt, dec_self_attn)
-                    save_attn_fig(os.path.join(args.log_dir, "%04d_enc_dec_attn.png" % i), tgt, src, enc_dec_attn)
-
-            with open(os.path.join(args.log_dir, "attn.pickle"), "wb") as f:
-                pickle.dump({
-                    "src": src_list,
-                    "tgt": tgt_list,
-                    "dec_self_attn": dec_self_attn_list,
-                    "enc_dec_attn": enc_dec_attn_list,
-                }, f)
 
     # end of cProfile
     pr.disable()
