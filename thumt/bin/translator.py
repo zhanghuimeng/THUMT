@@ -275,7 +275,7 @@ def main(args):
 
             # Decode
             if mode != "eval":
-                seqs, _ = utils.beam_search(model_list, features, params, counter, writer)
+                seqs, _ = utils.beam_search(model_list, features, params, counter, writer, to_cpu=args.cpu)
             else:
                 seqs, _ = utils.argmax_decoding(model_list, features, params)
 

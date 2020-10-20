@@ -174,19 +174,10 @@ class MultiHeadAttention(MultiHeadAttentionBase):
             for i in range(3):
                 typed_matrix.append((attn_mat == i).float())
             # typed_matrix: [3, batch, length_q, length_k]
-            typed_matrix = torch.stack(typed_matrix).cuda()
+            typed_matrix = torch.stack(typed_matrix)
             # no need to patch for infer, already patched
         else:
             raise RuntimeError("there is no attn_mat")
-        #     # typed_matrix = gen_typed_matrix_batch(seq_q, seq_k, vocab_q, vocab_k)
-        #     typed_matrix = gen_typed_matrix_cpu(seq_q.cpu().numpy(), seq_k.cpu().numpy(),
-        #                                         vocab_q, vocab_k)
-        #     # patch for infer
-        #     if mode == "infer":
-        #         if type == "enc-dec-attn":
-        #             typed_matrix = typed_matrix[:, :, -1:, :]
-        #         elif type == "dec-self-attn":
-        #             typed_matrix = typed_matrix[:, :, -1:, :]
 
         # split heads
         # qh: [batch, heads, length_q, h2] or [batch, heads, 1, h2]
@@ -214,9 +205,7 @@ class MultiHeadAttention(MultiHeadAttentionBase):
         logits = torch.sum(typed_logits, dim=0)
 
         if bias is not None:
-            # print("logits(1): %s" % str(list(logits.shape)))
             logits = logits + bias
-            # print("logits(2): %s" % str(list(logits.shape)))
 
         weights = torch.nn.functional.dropout(torch.softmax(logits, dim=-1),
                                               p=self.dropout,

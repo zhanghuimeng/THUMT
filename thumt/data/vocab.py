@@ -176,6 +176,7 @@ def lookup(inputs, mode, params, to_cpu=False):
 
     if not to_cpu:
         src_mask = src_mask.cuda()
+        enc_self_attn = enc_self_attn.cuda()
 
     features = {
         "source": source,

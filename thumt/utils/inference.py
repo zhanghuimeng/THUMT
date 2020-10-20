@@ -83,13 +83,16 @@ class BeamSearchState(namedtuple("BeamSearchState",
     pass
 
 
-def _get_inference_fn(model_fns, features):
+def _get_inference_fn(model_fns, features, to_cpu=False):
     def inference_fn(inputs, state, step):
         length_k = features["source"].shape[-1]
         dec_self_attn = torch.from_numpy(
-            state[0]["typed_matrix"]["dec_self_attn"]["mat"][:, step, np.newaxis, :step + 1]).cuda()
+            state[0]["typed_matrix"]["dec_self_attn"]["mat"][:, step, np.newaxis, :step + 1])
         enc_dec_attn = torch.from_numpy(
-            state[0]["typed_matrix"]["enc_dec_attn"]["mat"][:, step, np.newaxis, :length_k]).cuda()
+            state[0]["typed_matrix"]["enc_dec_attn"]["mat"][:, step, np.newaxis, :length_k])
+        if not to_cpu:
+            dec_self_attn = dec_self_attn.cuda()
+            enc_dec_attn = enc_dec_attn.cuda()
         local_features = {
             "source": features["source"],
             "source_mask": features["source_mask"],
@@ -196,10 +199,6 @@ def _beam_search_step(time, func, state, batch_size, beam_size, alpha,
         writer.add_scalar("beam_search/epoch_%d/beam_search_1" % epoch,
                           python_time() - time_point, time)
     time_point = python_time()
-    tgt_seq = map_structure(
-        lambda x: _merge_first_two_dims(x),
-        alive_seqs,
-    ).cpu().numpy()
     for model_state in alive_state:
         helper.update_tgt_stack_batch_cpu(
             step=time + 1,
@@ -264,7 +263,7 @@ def _beam_search_step(time, func, state, batch_size, beam_size, alpha,
     return new_state
 
 
-def beam_search(models, features, params, epoch=-1, writer=None):
+def beam_search(models, features, params, epoch=-1, writer=None, to_cpu=False):
     if not isinstance(models, (list, tuple)):
         raise ValueError("'models' must be a list or tuple")
 
@@ -330,7 +329,7 @@ def beam_search(models, features, params, epoch=-1, writer=None):
                                             [batch_size * beam_size, seq_length, seq_length])
 
     # fixed the way to modify
-    decoding_fn = _get_inference_fn(funcs, features)
+    decoding_fn = _get_inference_fn(funcs, features, to_cpu)
 
     states = map_structure(
         lambda x: _tile_to_beam_size(x, beam_size),
