@@ -232,8 +232,6 @@ def main(args):
                   for _ in range(dist.get_world_size())]
         
         all_outputs = []
-        all_dec_self_attn = []
-        all_enc_dec_attn = []
 
         start_time = time.time()
         if args.log_dir is not None:
@@ -341,30 +339,6 @@ def main(args):
     ps.print_stats()
     with open(os.path.join(args.log_dir, "profile.txt"), "w") as f:
         f.write(s.getvalue())
-
-
-# 0: green, 1: red, 2: blue
-colors = ["green", "red", "blue"]
-cmap = ListedColormap(colors)
-
-def save_attn_fig(filename, seq_q, seq_k, mat):
-    nq = len(seq_q)
-    nk = len(seq_k)
-    extent = (0, nk, nq, 0)
-    _, ax = plt.subplots(figsize=((nk + 3) // 4 + 4, (nq + 3) // 4 + 4))
-    ax.imshow(mat, vmin=0, vmax=len(cmap.colors), cmap=cmap, extent=extent)
-    ax.set_frame_on(False)
-    locs = np.arange(nk)
-    ax.xaxis.set_ticks(locs, minor=True)
-    ax.xaxis.set(ticks=locs + 0.5, ticklabels=seq_k)
-    locs = np.arange(nq)
-    ax.yaxis.set_ticks(locs, minor=True)
-    ax.yaxis.set(ticks=locs + 0.5, ticklabels=seq_q)
-    for tick in ax.get_xticklabels():
-        tick.set_rotation(90)
-    ax.grid(color='w', linewidth=1, which="minor")
-    plt.savefig(filename)
-    plt.close()
 
 
 # Wrap main function
