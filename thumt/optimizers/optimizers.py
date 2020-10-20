@@ -42,27 +42,12 @@ def _compute_grad_norm(gradients):
     total_norm = 0.0
 
     for grad in gradients:
+        if grad is None:
+            continue
+
         total_norm += float(grad.data.norm() ** 2)
 
     return float(total_norm ** 0.5)
-
-
-def exclude_variables(pattern, grads_and_vars):
-    if not pattern:
-        return grads_and_vars
-
-    pattern = re.compile(pattern)
-    new_grads = []
-    new_vars = []
-
-    for grad, (name, var) in grads_and_vars:
-        if re.search(pattern, var.tensor_name):
-            continue
-        else:
-            new_grads.append(grad)
-            new_vars.append((name, var))
-
-    return zip(new_grads, new_vars)
 
 
 class Optimizer(object):
@@ -83,7 +68,7 @@ class Optimizer(object):
                 grad.mul_(scale)
 
     def sync_gradients(self, gradients, compress=True):
-        grad_vec = torch.nn.utils.parameters_to_vector(gradients)
+        grad_vec = utils.params_to_vec(gradients)
 
         if compress:
             grad_vec_half = grad_vec.half()
@@ -92,7 +77,7 @@ class Optimizer(object):
         else:
             dist.all_reduce(grad_vec)
 
-        torch.nn.utils.vector_to_parameters(grad_vec, gradients)
+        utils.vec_to_params(grad_vec, gradients)
 
     def zero_gradients(self, gradients):
         for grad in gradients:
@@ -166,10 +151,10 @@ class SGDOptimizer(Optimizer):
             step_size = lr
 
             if var.dtype == torch.float32:
-                var.data.add_(-step_size, grad)
+                var.data.add_(grad, alpha=-step_size)
             else:
                 fp32_var = var.data.float()
-                fp32_var.add_(-step_size, grad)
+                fp32_var.add_(grad, alpha=-step_size)
                 var.data.copy_(fp32_var)
 
     def state_dict(self):
@@ -183,7 +168,6 @@ class SGDOptimizer(Optimizer):
         return state
 
     def load_state_dict(self, state):
-        self._learning_rate = state.get("learning_rate", self._learning_rate)
         self._iterations = state.get("iterations", self._iterations)
 
 
@@ -244,8 +228,8 @@ class AdamOptimizer(Optimizer):
             bias_corr_1 = 1 - beta_1 ** self._iterations
             bias_corr_2 = 1 - beta_2 ** self._iterations
 
-            m.mul_(beta_1).add_(1 - beta_1, grad)
-            v.mul_(beta_2).addcmul_(1 - beta_2, grad, grad)
+            m.mul_(beta_1).add_(grad, alpha=1 - beta_1)
+            v.mul_(beta_2).addcmul_(grad, grad, value=1 - beta_2)
             denom = (v.sqrt() / math.sqrt(bias_corr_2)).add_(epsilon)
 
             if isinstance(lr, LearningRateSchedule):
@@ -254,10 +238,10 @@ class AdamOptimizer(Optimizer):
             step_size = lr / bias_corr_1
 
             if var.dtype == torch.float32:
-                var.data.addcdiv_(-step_size, m, denom)
+                var.data.addcdiv_(m, denom, value=-step_size)
             else:
                 fp32_var = var.data.float()
-                fp32_var.addcdiv_(-step_size, m, denom)
+                fp32_var.addcdiv_(m, denom, value=-step_size)
                 var.data.copy_(fp32_var)
 
     def state_dict(self):
@@ -275,10 +259,6 @@ class AdamOptimizer(Optimizer):
         return state
 
     def load_state_dict(self, state):
-        self._learning_rate = state.get("learning_rate", self._learning_rate)
-        self._beta_1 = state.get("beta_1", self._beta_1)
-        self._beta_2 = state.get("beta_2", self._beta_2)
-        self._epsilon = state.get("epsilon", self._epsilon)
         self._iterations = state.get("iterations", self._iterations)
 
         slots = state.get("slot", {})
@@ -350,16 +330,16 @@ class AdadeltaOptimizer(Optimizer):
             if isinstance(lr, LearningRateSchedule):
                 lr = lr(self._iterations)
 
-            square_avg.mul_(rho).addcmul_(1 - rho, grad, grad)
+            square_avg.mul_(rho).addcmul_(grad, grad, value=1 - rho)
             std = square_avg.add(epsilon).sqrt_()
             delta = acc_delta.add(epsilon).sqrt_().div_(std).mul_(grad)
-            acc_delta.mul_(rho).addcmul_(1 - rho, delta, delta)
+            acc_delta.mul_(rho).addcmul_(delta, delta, value=1 - rho)
 
             if var.dtype == torch.float32:
-                var.data.add_(-lr, delta)
+                var.data.add_(delta, alpha=-lr)
             else:
                 fp32_var = var.data.float()
-                fp32_var.add_(-lr, delta)
+                fp32_var.add_(delta, alpha=-lr)
                 var.data.copy_(fp32_var)
 
     def state_dict(self):
@@ -376,9 +356,6 @@ class AdadeltaOptimizer(Optimizer):
         return state
 
     def load_state_dict(self, state):
-        self._learning_rate = state.get("learning_rate", self._learning_rate)
-        self._rho = state.get("rho", self._rho)
-        self._epsilon = state.get("epsilon", self._epsilon)
         self._iterations = state.get("iterations", self._iterations)
 
         slots = state.get("slot", {})
@@ -470,10 +447,6 @@ class LossScalingOptimizer(Optimizer):
         return state
 
     def load_state_dict(self, state):
-        self._scale = state.get("scale", self._scale)
-        self._increment_period = state.get("increment_period",
-                                           self._increment_period)
-        self._multiplier = state.get("multiplier", self._multiplier)
         self._num_good_steps = state.get("num_good_steps",
                                          self._num_good_steps)
         self._optimizer.load_state_dict(state.get("optimizer", {}))
@@ -525,7 +498,5 @@ class MultiStepOptimizer(Optimizer):
         return state
 
     def load_state_dict(self, state):
-        self._n = state.get("n", self._n)
         self._iterations = state.get("iterations", self._iterations)
-        self._compress = state.get("compress", self._iterations)
         self._optimizer.load_state_dict(state.get("optimizer", {}))
