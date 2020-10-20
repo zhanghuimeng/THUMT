@@ -14,6 +14,9 @@ import six
 import socket
 import time
 import torch
+import cProfile
+import pstats
+import io
 
 import thumt.data as data
 import torch.distributed as dist
@@ -32,6 +35,8 @@ def parse_args():
                         help="Path of input file")
     parser.add_argument("--output", type=str, required=True,
                         help="Path of output file")
+    parser.add_argument("--log_dir", type=str, default="log",
+                        help="Path of log")
     parser.add_argument("--checkpoints", type=str, required=True, nargs="+",
                         help="Path of trained models")
     parser.add_argument("--vocabulary", type=str, nargs=2, required=True,
@@ -197,7 +202,7 @@ def main(args):
 
             model.eval()
             model.load_state_dict(
-                torch.load(utils.latest_checkpoint(args.checkpoints[i]),
+                torch.load(args.checkpoints[i],
                            map_location="cpu")["model"])
 
             model_list.append(model)
@@ -225,6 +230,7 @@ def main(args):
         
         all_outputs = []
 
+        start_time = time.time()
         while True:
             try:
                 features = next(iterator)
@@ -299,6 +305,9 @@ def main(args):
             t = time.time() - t
             print("Finished batch: %d (%.3f sec)" % (counter, t))
 
+        t = time.time() - start_time
+        print("Total time: %.3f sec" % t)
+
         if dist.get_rank() == 0:
             restored_outputs = []
             if sorted_key is not None:
@@ -322,7 +331,22 @@ def main(args):
 def process_fn(rank, args):
     local_args = copy.copy(args)
     local_args.local_rank = rank
+    profiler = cProfile.Profile()
+    profiler.enable()
     main(local_args)
+    profiler.disable()
+
+    result = io.StringIO()
+    pstats.Stats(profiler, stream=result).print_stats()
+    result = result.getvalue()
+    # chop the string into a csv-like buffer
+    result = "ncalls" + result.split("ncalls")[-1]
+    result = "\n".join([",".join(line.rstrip().split(None, 5)) for line in result.split("\n")])
+    # save it to disk
+    os.makedirs(args.log_dir, exist_ok=True)
+    with open(os.path.join(args.log_dir, "cProfile.csv"), "w") as f:
+        f.write(result)
+        f.close()
 
 
 def cli_main():
