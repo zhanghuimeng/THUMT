@@ -83,13 +83,16 @@ class BeamSearchState(namedtuple("BeamSearchState",
     pass
 
 
-def _get_inference_fn(model_fns, features):
+def _get_inference_fn(model_fns, features, to_cpu=False):
     def inference_fn(inputs, state, step):
         length_k = features["source"].shape[-1]
         dec_self_attn = torch.from_numpy(
-            state[0]["typed_matrix"]["dec_self_attn"]["mat"][:, step, np.newaxis, :step + 1]).cuda()
+            state[0]["typed_matrix"]["dec_self_attn"]["mat"][:, step, np.newaxis, :step + 1])
         enc_dec_attn = torch.from_numpy(
-            state[0]["typed_matrix"]["enc_dec_attn"]["mat"][:, step, np.newaxis, :length_k]).cuda()
+            state[0]["typed_matrix"]["enc_dec_attn"]["mat"][:, step, np.newaxis, :length_k])
+        if not to_cpu:
+            dec_self_attn = dec_self_attn.cuda()
+            enc_dec_attn = enc_dec_attn.cuda()
         local_features = {
             "source": features["source"],
             "source_mask": features["source_mask"],
@@ -97,7 +100,7 @@ def _get_inference_fn(model_fns, features):
             "dec_self_attn": dec_self_attn,
             "enc_dec_attn": enc_dec_attn,
             "target": inputs,
-            "target_mask": torch.ones(*inputs.shape).float().cuda()
+            "target_mask": torch.ones(*inputs.shape).to(inputs).float()
         }
 
         outputs = []
@@ -124,7 +127,7 @@ def _get_inference_fn(model_fns, features):
 
 
 def _beam_search_step(time, func, state, batch_size, beam_size, alpha,
-                      pad_id, eos_id, max_length, inf=-1e9, vocab=None,
+                      pad_id, eos_id, min_length, max_length, inf=-1e9, vocab=None,
                       source=None, src_vocab=None,
                       length_src=None, epoch=-1, writer=None):
     time_point = python_time()
@@ -151,6 +154,10 @@ def _beam_search_step(time, func, state, batch_size, beam_size, alpha,
     length_penalty = ((5.0 + float(time + 1)) / 6.0) ** alpha
     curr_scores = curr_log_probs / length_penalty
     vocab_size = curr_scores.shape[-1]
+
+    # Prevent null translation
+    min_length_flags = torch.ge(min_length, time + 1).float().mul_(inf)
+    curr_scores[:, :, eos_id].add_(min_length_flags)
 
     # Select top-k candidates
     # [batch_size, beam_size * vocab_size]
@@ -218,15 +225,15 @@ def _beam_search_step(time, func, state, batch_size, beam_size, alpha,
             nearest_q=model_state["typed_matrix"]["nearest_q"],
             stack_history_k=model_state["typed_matrix"]["enc_dec_attn"]["stack_history_k"],
         )
-        print("step=%d" % (time + 1))
-        helper.print_state(
-            step=time + 1,
-            src_seq=source.cpu().numpy(),
-            tgt_seq=tgt_seq,
-            src_vocab=src_vocab,
-            tgt_vocab=vocab,
-            state=model_state
-        )
+        # print("step=%d" % (time + 1))
+        # helper.print_state(
+        #     step=time + 1,
+        #     src_seq=source.cpu().numpy(),
+        #     tgt_seq=tgt_seq,
+        #     src_vocab=src_vocab,
+        #     tgt_vocab=vocab,
+        #     state=model_state
+        # )
     alive_state = map_structure(
         lambda x: _split_first_two_dims(x, batch_size, beam_size),
         alive_state
@@ -268,7 +275,7 @@ def _beam_search_step(time, func, state, batch_size, beam_size, alpha,
     return new_state
 
 
-def beam_search(models, features, params, epoch=-1, writer=None):
+def beam_search(models, features, params, epoch=-1, writer=None, to_cpu=False):
     if not isinstance(models, (list, tuple)):
         raise ValueError("'models' must be a list or tuple")
 
@@ -315,6 +322,7 @@ def beam_search(models, features, params, epoch=-1, writer=None):
     max_step = max_length.max()
     # [batch, beam_size]
     max_length = torch.unsqueeze(max_length, 1).repeat([1, beam_size])
+    min_length = torch.ones_like(max_length)
 
     # Expand the inputs
     # [batch, length] => [batch * beam_size, length]
@@ -333,7 +341,7 @@ def beam_search(models, features, params, epoch=-1, writer=None):
                                             [batch_size * beam_size, seq_length, seq_length])
 
     # fixed the way to modify
-    decoding_fn = _get_inference_fn(funcs, features)
+    decoding_fn = _get_inference_fn(funcs, features, to_cpu)
 
     states = map_structure(
         lambda x: _tile_to_beam_size(x, beam_size),
@@ -391,7 +399,7 @@ def beam_search(models, features, params, epoch=-1, writer=None):
     for time in range(max_step):
         state = _beam_search_step(
             time=time, func=decoding_fn, state=state, batch_size=batch_size,
-            beam_size=beam_size, alpha=alpha, pad_id=pad_id, eos_id=eos_id,
+            beam_size=beam_size, alpha=alpha, pad_id=pad_id, eos_id=eos_id, min_length=min_length,
             max_length=max_length, inf=-1e9, vocab=tgt_vocabulary,
             source=features["source"], src_vocab=src_vocabulary,
             length_src=length_src, epoch=epoch, writer=writer)
@@ -430,16 +438,16 @@ def beam_search(models, features, params, epoch=-1, writer=None):
     dec_self_attn = final_state.state[0]["typed_matrix"]["dec_self_attn"]["mat"][:, 0, :, :]
     enc_dec_attn = final_state.state[0]["typed_matrix"]["enc_dec_attn"]["mat"][:, 0, :, :]
 
-    with np.printoptions(threshold=np.inf):
-        for i in range(beam_size):
-            print("src:")
-            helper.print_sentence(features["source"][i // 4], src_vocabulary["idx2word"])
-            print("tgt:")
-            helper.print_sentence(final_seqs[0, i, :], tgt_vocabulary["idx2word"])
-            print("dec_self_attn: ")
-            print(final_state.state[0]["typed_matrix"]["dec_self_attn"]["mat"][0, i, :20, :20])
-            print("enc_dec_attn: ")
-            print(final_state.state[0]["typed_matrix"]["enc_dec_attn"]["mat"][0, i, :20, :20])
+    # with np.printoptions(threshold=np.inf):
+    #     for i in range(beam_size):
+    #         print("src:")
+    #         helper.print_sentence(features["source"][i // 4], src_vocabulary["idx2word"])
+    #         print("tgt:")
+    #         helper.print_sentence(final_seqs[0, i, :], tgt_vocabulary["idx2word"])
+    #         print("dec_self_attn: ")
+    #         print(final_state.state[0]["typed_matrix"]["dec_self_attn"]["mat"][0, i, :20, :20])
+    #         print("enc_dec_attn: ")
+    #         print(final_state.state[0]["typed_matrix"]["enc_dec_attn"]["mat"][0, i, :20, :20])
 
     return final_seqs[:, :top_beams, 1:], final_scores[:, :top_beams], dec_self_attn, enc_dec_attn
 

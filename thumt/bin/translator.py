@@ -42,9 +42,8 @@ def parse_args():
                         help="Path of input file")
     parser.add_argument("--output", type=str, required=True,
                         help="Path of output file")
-    parser.add_argument("--log_dir", type=str, required=True,
-                        default="test/",
-                        help="Path of output file")
+    parser.add_argument("--log_dir", type=str, default="log",
+                        help="Path of log")
     parser.add_argument("--checkpoints", type=str, required=True, nargs="+",
                         help="Path of trained models")
     parser.add_argument("--vocabulary", type=str, nargs=2, required=True,
@@ -55,10 +54,15 @@ def parse_args():
                         help="Name of the model")
     parser.add_argument("--parameters", type=str, default="",
                         help="Additional hyper parameters")
-    parser.add_argument("--half", action="store_true",
-                        help="Use half precision for decoding")
     parser.add_argument("--save_attn_fig", action="store_true",
                         help="Save typed-attn figure for each sentence")
+
+    # mutually exclusive parameters
+    group = parser.add_mutually_exclusive_group()
+    group.add_argument("--half", action="store_true",
+                       help="Use half precision for decoding")
+    group.add_argument("--cpu", action="store_true",
+                       help="Use CPU for decoding")
 
     return parser.parse_args()
 
@@ -183,11 +187,20 @@ def main(args):
         for i in range(len(model_cls_list))]
 
     params = params_list[0]
-    dist.init_process_group("nccl", init_method=args.url,
-                            rank=args.local_rank,
-                            world_size=len(params.device_list))
-    torch.cuda.set_device(params.device_list[args.local_rank])
-    torch.set_default_tensor_type(torch.cuda.FloatTensor)
+    if args.cpu:
+        dist.init_process_group(
+            "gloo", init_method=args.url, rank=args.local_rank,
+            world_size=1)
+    else:
+        dist.init_process_group(
+            "nccl", init_method=args.url, rank=args.local_rank,
+            world_size=len(params.device_list))
+
+    if args.cpu:
+        torch.set_default_tensor_type(torch.FloatTensor)
+    else:
+        torch.cuda.set_device(params.device_list[args.local_rank])
+        torch.set_default_tensor_type(torch.cuda.FloatTensor)
 
     if args.half:
         torch.set_default_dtype(torch.half)
@@ -198,7 +211,10 @@ def main(args):
         model_list = []
 
         for i in range(len(args.models)):
-            model = model_cls_list[i](params_list[i]).cuda()
+            if args.cpu:
+                model = model_cls_list[i](params_list[i])
+            else:
+                model = model_cls_list[i](params_list[i]).cuda()
 
             if args.half:
                 model = model.half()
@@ -243,7 +259,8 @@ def main(args):
         while True:
             try:
                 features = next(iterator)
-                features = data.lookup(features, mode, params)
+                features = data.lookup(features, mode, params,
+                                       to_cpu=args.cpu)
 
                 if mode == "eval":
                     features = features[0]
@@ -267,7 +284,7 @@ def main(args):
 
             # Decode
             if mode != "eval":
-                seqs, _, dec_self_attn, enc_dec_attn = utils.beam_search(model_list, features, params, counter, writer)
+                seqs, _, dec_self_attn, enc_dec_attn = utils.beam_search(model_list, features, params, counter, writer, to_cpu=args.cpu)
             else:
                 seqs, _ = utils.argmax_decoding(model_list, features, params)
 
@@ -281,8 +298,12 @@ def main(args):
             # Synchronization
             size.zero_()
             size[dist.get_rank()].copy_(torch.tensor(batch_size))
-            dist.all_reduce(size)
-            dist.all_gather(t_list, seqs)
+
+            if args.cpu:
+                t_list[dist.get_rank()].copy_(seqs)
+            else:
+                dist.all_reduce(size)
+                dist.all_gather(t_list, seqs)
 
             if size.sum() == 0:
                 break
@@ -378,14 +399,6 @@ def main(args):
                     "enc_dec_attn": enc_dec_attn_list,
                 }, f)
 
-    # end of cProfile
-    pr.disable()
-    s = io.StringIO()
-    ps = pstats.Stats(pr, stream=s).sort_stats('tottime')
-    ps.print_stats()
-    with open(os.path.join(args.log_dir, "profile.txt"), "w") as f:
-        f.write(s.getvalue())
-
 
 # 0: green, 1: red, 2: blue
 colors = ["green", "red", "blue"]
@@ -415,7 +428,22 @@ def save_attn_fig(filename, seq_q, seq_k, mat):
 def process_fn(rank, args):
     local_args = copy.copy(args)
     local_args.local_rank = rank
+    profiler = cProfile.Profile()
+    profiler.enable()
     main(local_args)
+    profiler.disable()
+
+    result = io.StringIO()
+    pstats.Stats(profiler, stream=result).print_stats()
+    result = result.getvalue()
+    # chop the string into a csv-like buffer
+    result = "ncalls" + result.split("ncalls")[-1]
+    result = "\n".join([",".join(line.rstrip().split(None, 5)) for line in result.split("\n")])
+    # save it to disk
+    os.makedirs(args.log_dir, exist_ok=True)
+    with open(os.path.join(args.log_dir, "cProfile.csv"), "w") as f:
+        f.write(result)
+        f.close()
 
 
 def cli_main():
@@ -428,7 +456,10 @@ def cli_main():
         url = "tcp://localhost:" + str(port)
         parsed_args.url = url
 
-    world_size = infer_gpu_num(parsed_args.parameters)
+    if parsed_args.cpu:
+        world_size = 1
+    else:
+        world_size = infer_gpu_num(parsed_args.parameters)
 
     if world_size > 1:
         torch.multiprocessing.spawn(process_fn, args=(parsed_args,),
