@@ -95,7 +95,7 @@ def _get_inference_fn(model_fns, features):
             "dec_self_attn": dec_self_attn,
             "enc_dec_attn": enc_dec_attn,
             "target": inputs,
-            "target_mask": torch.ones(*inputs.shape).float().cuda()
+            "target_mask": torch.ones(*inputs.shape).to(inputs).float()
         }
 
         outputs = []
@@ -122,7 +122,7 @@ def _get_inference_fn(model_fns, features):
 
 
 def _beam_search_step(time, func, state, batch_size, beam_size, alpha,
-                      pad_id, eos_id, max_length, inf=-1e9, vocab=None,
+                      pad_id, eos_id, min_length, max_length, inf=-1e9, vocab=None,
                       source=None, src_vocab=None,
                       length_src=None, epoch=-1, writer=None):
     time_point = python_time()
@@ -149,6 +149,10 @@ def _beam_search_step(time, func, state, batch_size, beam_size, alpha,
     length_penalty = ((5.0 + float(time + 1)) / 6.0) ** alpha
     curr_scores = curr_log_probs / length_penalty
     vocab_size = curr_scores.shape[-1]
+
+    # Prevent null translation
+    min_length_flags = torch.ge(min_length, time + 1).float().mul_(inf)
+    curr_scores[:, :, eos_id].add_(min_length_flags)
 
     # Select top-k candidates
     # [batch_size, beam_size * vocab_size]
@@ -257,7 +261,7 @@ def _beam_search_step(time, func, state, batch_size, beam_size, alpha,
     return new_state
 
 
-def beam_search(models, features, params, epoch=-1, writer=None):
+def beam_search(models, features, params, epoch=-1, writer=None, to_cpu=False):
     if not isinstance(models, (list, tuple)):
         raise ValueError("'models' must be a list or tuple")
 
@@ -304,6 +308,7 @@ def beam_search(models, features, params, epoch=-1, writer=None):
     max_step = max_length.max()
     # [batch, beam_size]
     max_length = torch.unsqueeze(max_length, 1).repeat([1, beam_size])
+    min_length = torch.ones_like(max_length)
 
     # Expand the inputs
     # [batch, length] => [batch * beam_size, length]
@@ -379,7 +384,7 @@ def beam_search(models, features, params, epoch=-1, writer=None):
     for time in range(max_step):
         state = _beam_search_step(
             time=time, func=decoding_fn, state=state, batch_size=batch_size,
-            beam_size=beam_size, alpha=alpha, pad_id=pad_id, eos_id=eos_id,
+            beam_size=beam_size, alpha=alpha, pad_id=pad_id, eos_id=eos_id, min_length=min_length,
             max_length=max_length, inf=-1e9, vocab=tgt_vocabulary,
             source=features["source"], src_vocab=src_vocabulary,
             length_src=length_src, epoch=epoch, writer=writer)

@@ -10,7 +10,7 @@ import torch
 import numpy as np
 
 
-def _lookup(x, vocab):
+def _lookup(x, vocab, to_cpu=False):
     x = x.tolist()
     y = []
 
@@ -19,6 +19,9 @@ def _lookup(x, vocab):
         for _, v in enumerate(batch):
             ids.append(vocab[v] if v in vocab else 2)
         y.append(ids)
+
+    if to_cpu:
+        return torch.LongTensor(np.array(y, dtype="int32"))
 
     return torch.LongTensor(np.array(y, dtype="int32")).cuda()
 
@@ -129,22 +132,29 @@ def load_tagged_vocabulary(filenames):
            }
 
 
-def lookup(inputs, mode, params):
+def lookup(inputs, mode, params, to_cpu=False):
     if mode != "infer":
         features, labels = inputs
         source, target = features["source"], features["target"]
         source = source.numpy()
         target = target.numpy()
         labels = labels.numpy()
-        src_mask = torch.FloatTensor(features["source_mask"].numpy()).cuda()
-        tgt_mask = torch.FloatTensor(features["target_mask"].numpy()).cuda()
-        enc_self_attn = torch.LongTensor(features["enc_self_attn"].numpy()).cuda()
-        dec_self_attn = torch.LongTensor(features["dec_self_attn"].numpy()).cuda()
-        enc_dec_attn = torch.LongTensor(features["enc_dec_attn"].numpy()).cuda()
+        src_mask = torch.FloatTensor(features["source_mask"].numpy())
+        tgt_mask = torch.FloatTensor(features["target_mask"].numpy())
+        enc_self_attn = torch.LongTensor(features["enc_self_attn"].numpy())
+        dec_self_attn = torch.LongTensor(features["dec_self_attn"].numpy())
+        enc_dec_attn = torch.LongTensor(features["enc_dec_attn"].numpy())
 
-        source = _lookup(source, params.lookup["source"])
-        target = _lookup(target, params.lookup["target"])
-        labels = _lookup(labels, params.lookup["target"])
+        if not to_cpu:
+            src_mask = src_mask.cuda()
+            tgt_mask = tgt_mask.cuda()
+            enc_self_attn = enc_self_attn.cuda()
+            dec_self_attn = dec_self_attn.cuda()
+            enc_dec_attn = enc_dec_attn.cuda()
+
+        source = _lookup(source, params.lookup["source"], to_cpu=to_cpu)
+        target = _lookup(target, params.lookup["target"], to_cpu=to_cpu)
+        labels = _lookup(labels, params.lookup["target"], to_cpu=to_cpu)
 
         features = {
             "source": source,
@@ -157,16 +167,20 @@ def lookup(inputs, mode, params):
         }
 
         return features, labels
-    else:
-        source = inputs["source"].numpy()
-        source = _lookup(source, params.lookup["source"])
-        src_mask = torch.FloatTensor(inputs["source_mask"].numpy()).cuda()
-        enc_self_attn = torch.LongTensor(inputs["enc_self_attn"].numpy()).cuda()
 
-        features = {
-            "source": source,
-            "source_mask": src_mask,
-            "enc_self_attn": enc_self_attn,
-        }
+    source = inputs["source"].numpy()
+    source = _lookup(source, params.lookup["source"], to_cpu=to_cpu)
+    src_mask = torch.FloatTensor(inputs["source_mask"].numpy())
+    enc_self_attn = torch.LongTensor(inputs["enc_self_attn"].numpy())
 
-        return features
+    if not to_cpu:
+        src_mask = src_mask.cuda()
+        enc_self_attn = enc_self_attn.cuda()
+
+    features = {
+        "source": source,
+        "source_mask": src_mask,
+        "enc_self_attn": enc_self_attn,
+    }
+
+    return features
