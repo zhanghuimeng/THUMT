@@ -40,11 +40,6 @@ class AttentionSubLayer(modules.Module):
         else:
             y = x
 
-        # print("seq_q")
-        # utils.helper.print_sentence(seq_q.cpu().numpy(), vocab_q["idx2word"])
-        # print("seq_k")
-        # utils.helper.print_sentence(seq_k.cpu().numpy(), vocab_k["idx2word"])
-        # exit(0)
 
         if self.training or state is None:
             y = self.attention(y, bias, seq_q, seq_k, vocab_q, vocab_k, memory, None,
@@ -209,11 +204,6 @@ class Transformer(modules.Module):
         # add vocabulary of source and target
         self.src_vocabulary, self.tgt_vocabulary = \
             data.vocab.load_tagged_vocabulary(params.vocab)
-        # for i, token in enumerate(self.tgt_vocabulary["vocab"]):
-        #     if "<" in token:
-        #         print(token)
-        #         print(self.tgt_vocabulary["tag_attr"][i])
-        # exit(0)
 
         with utils.scope(name):
             self.build_embedding(params)

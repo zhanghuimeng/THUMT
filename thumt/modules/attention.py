@@ -120,25 +120,23 @@ class MultiHeadAttention(MultiHeadAttentionBase):
         self.dropout = dropout
 
         with utils.scope(name):
-            self.q_transform = Affine(hidden_size, hidden_size,
-                                      name="q_transform")
-            self.k_transform = Affine(hidden_size, hidden_size,
-                                      name="k_transform")
+            self.q_transform = [Affine(hidden_size, hidden_size,
+                                      name="q_transform_%d" % i) for i in range(3)]
+            self.k_transform = [Affine(hidden_size, hidden_size,
+                                      name="k_transform_%d" % i) for i in range(3)]
             self.v_transform = Affine(hidden_size, hidden_size,
                                       name="v_transform")
             self.o_transform = Affine(hidden_size, hidden_size,
                                       name="o_transform")
-            # typed-attention
-            self.typed_weight = nn.Parameter(torch.zeros(
-                [3, self.num_heads, self.hidden_size // self.num_heads, self.hidden_size // self.num_heads],
-                dtype=torch.float32))
-            self.add_name(self.typed_weight, "typed_weight")
 
         self.reset_parameters()
 
     def forward(self, query, bias, seq_q, seq_k, vocab_q, vocab_k,
                 memory=None, kv=None, attn_mat=None, mode="train", type="enc-self-attn"):
-        q = self.q_transform(query)
+        # q shape (past): [batch, len_q, hidden]
+        # q = self.q_transform(query)
+        # q shape (now): [3, batch, len_q, hidden]
+        q = torch.stack([self.q_transform[i](query) for i in range(3)])
 
         if memory is not None:
             if kv is not None:
@@ -147,25 +145,21 @@ class MultiHeadAttention(MultiHeadAttentionBase):
                 k, v = None, None
 
             # encoder-decoder attention
-            k = k or self.k_transform(memory)
+            # k = k or self.k_transform(memory)
+            k = k or torch.stack([self.k_transform[i](query) for i in range(3)])
             v = v or self.v_transform(memory)
         else:
             # self-attention
-            k = self.k_transform(query)
+            # k = self.k_transform(query)
+            k = torch.stack([self.k_transform[i](query) for i in range(3)])
             v = self.v_transform(query)
 
             if kv is not None:
+                # 问题：是否需要因为k的维度变化修改dim？
                 k = torch.cat([kv[0], k], dim=1)
                 v = torch.cat([kv[1], v], dim=1)
 
         # typed-attention matrix
-        # TODO: need to modify to batched process
-        # print("device: %d" % dist.get_rank())
-        # print(mode)
-        # print(type)
-        # print("q: %s" % str(list(q.size())))
-        # print("k: %s" % str(list(k.size())))
-        # print()
         # typed_matrix: [3, batch, length_q, length_k]
         # or: [3, batch, 1, length_k]
         # or: [3, batch, 1, 1]
@@ -180,10 +174,14 @@ class MultiHeadAttention(MultiHeadAttentionBase):
             raise RuntimeError("there is no attn_mat")
 
         # split heads
-        # qh: [batch, heads, length_q, h2] or [batch, heads, 1, h2]
-        # kh, vh: [batch, heads, length_k, h2]
-        qh = self.split_heads(q, self.num_heads)
-        kh = self.split_heads(k, self.num_heads)
+        # because the shape of q is different, change split_heads
+        # qh: [3, batch, heads, len_q, h2] or [3, batch, heads, 1, h2]
+        # kh: [3, batch, heads, len_q, h2]
+        # vh: [batch, heads, len_k, h2]
+        # qh = self.split_heads(q, self.num_heads)
+        # kh = self.split_heads(k, self.num_heads)
+        qh = self.split_heads_4d(q, self.num_heads)
+        kh = self.split_heads_4d(k, self.num_heads)
         vh = self.split_heads(v, self.num_heads)
 
         # scale query
@@ -193,16 +191,20 @@ class MultiHeadAttention(MultiHeadAttentionBase):
         # kh = torch.transpose(kh, -2, -1)
         # logits = torch.matmul(qh, kh)
 
-        # typed_attention
-        # us_weight: [3, 1, heads, h2, h2]
-        us_weight = torch.unsqueeze(self.typed_weight, 1)
-        # kh: [batch, heads, h2, length_k]
+        # typed attention
+        # kh: [3, batch, heads, h2, leng_k]
         kh = torch.transpose(kh, -2, -1)
-        # typed_logits: [3, batch, heads, lq, lk]
-        typed_logits = torch.matmul(torch.matmul(qh, us_weight), kh)
-        typed_logits = typed_logits * typed_matrix.unsqueeze(2)
-        # logits: [batch, heads, lq, lk]
-        logits = torch.sum(typed_logits, dim=0)
+
+        # # typed_attention
+        # # us_weight: [3, 1, heads, h2, h2]
+        # us_weight = torch.unsqueeze(self.typed_weight, 1)
+        # # kh: [batch, heads, h2, length_k]
+        # kh = torch.transpose(kh, -2, -1)
+        # # typed_logits: [3, batch, heads, lq, lk]
+        # typed_logits = torch.matmul(torch.matmul(qh, us_weight), kh)
+        # typed_logits = typed_logits * typed_matrix.unsqueeze(2)
+        # # logits: [batch, heads, lq, lk]
+        # logits = torch.sum(typed_logits, dim=0)
 
         if bias is not None:
             logits = logits + bias
@@ -221,16 +223,27 @@ class MultiHeadAttention(MultiHeadAttentionBase):
 
         return output
 
+    # x shape: [3, batch, len, hidden]
+    @staticmethod
+    def split_heads_4d(x, heads):
+        batch = x.shape[1]
+        length = x.shape[2]
+        channels = x.shape[3]
+
+        y = torch.reshape(x, [x.shape[0], batch, length, heads, channels // heads])
+        return torch.transpose(y, 3, 2)
+
     def reset_parameters(self, initializer="uniform_scaling", **kwargs):
         if initializer == "uniform_scaling":
             # 6 / (4 * hidden_size) -> 6 / (2 * hidden_size)
-            nn.init.xavier_uniform_(self.q_transform.weight, 2 ** -0.5)
-            nn.init.xavier_uniform_(self.k_transform.weight, 2 ** -0.5)
+            for i in range(3):
+                nn.init.xavier_uniform_(self.q_transform[i].weight, 2 ** -0.5)
+                nn.init.xavier_uniform_(self.k_transform[i].weight, 2 ** -0.5)
             nn.init.xavier_uniform_(self.v_transform.weight, 2 ** -0.5)
             nn.init.xavier_uniform_(self.o_transform.weight)
-            nn.init.xavier_uniform_(self.typed_weight)  # typed-attention
-            nn.init.constant_(self.q_transform.bias, 0.0)
-            nn.init.constant_(self.k_transform.bias, 0.0)
+            for i in range(3):
+                nn.init.constant_(self.q_transform[i].bias, 0.0)
+                nn.init.constant_(self.k_transform[i].bias, 0.0)
             nn.init.constant_(self.v_transform.bias, 0.0)
             nn.init.constant_(self.o_transform.bias, 0.0)
         else:
